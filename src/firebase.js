@@ -1,9 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
 
-// ⚠️ Remplace ces valeurs par celles de TON projet Firebase.
-// Elles se trouvent dans : Console Firebase > Paramètres du projet > Général
-// > "Vos applications" > icône Web (</>) > Config SDK.
 const firebaseConfig = {
   apiKey: "AIzaSyCesyXpdobQgy-M_XHJ2w_xa53rEdhgEUU",
   authDomain: "gestion-de-pharmacie-7c82f.firebaseapp.com",
