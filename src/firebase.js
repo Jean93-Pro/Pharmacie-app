@@ -1,5 +1,12 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCesyXpdobQgy-M_XHJ2w_xa53rEdhgEUU",
@@ -12,28 +19,63 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+export const auth = getAuth(app);
 
-// Toutes les données de la pharmacie sont stockées dans la collection
-// "pharmacie", un document par type de données (meds, ventes, clients).
-// Cela reproduit le comportement de window.storage (une valeur JSON par clé),
-// mais avec une vraie base de données partagée en ligne.
+// ---------------------------------------------------------------
+// AUTHENTIFICATION
+// Chaque pharmacie cliente a son propre compte (email + mot de passe).
+// Le "pharmacieId" utilisé pour isoler les données est l'UID Firebase
+// de l'utilisateur connecté — unique, stable, et jamais choisi par
+// l'utilisateur, donc impossible à deviner ou à usurper.
+// ---------------------------------------------------------------
 
-export async function getList(key) {
-  const ref = doc(db, "pharmacie", key);
+export async function inscrirePharmacie(email, password, nomPharmacie) {
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  // On enregistre le nom de la pharmacie dans un document à part,
+  // pratique pour l'afficher dans l'interface plus tard.
+  await setDoc(doc(db, "pharmacies", cred.user.uid), {
+    nom: nomPharmacie,
+    email,
+    creeLe: new Date().toISOString(),
+  });
+  return cred.user;
+}
+
+export async function connecterPharmacie(email, password) {
+  const cred = await signInWithEmailAndPassword(auth, email, password);
+  return cred.user;
+}
+
+export async function deconnecter() {
+  await signOut(auth);
+}
+
+// Appelle callback(user) à chaque changement d'état de connexion.
+// user est null si personne n'est connecté.
+export function ecouterConnexion(callback) {
+  return onAuthStateChanged(auth, callback);
+}
+
+// ---------------------------------------------------------------
+// DONNÉES — désormais isolées par pharmacie
+// Avant : pharmacie/{key}                     (partagé par tout le monde)
+// Après : pharmacies/{pharmacieId}/data/{key}  (propre à chaque pharmacie)
+// ---------------------------------------------------------------
+
+export async function getList(pharmacieId, key) {
+  const ref = doc(db, "pharmacies", pharmacieId, "data", key);
   const snap = await getDoc(ref);
   if (!snap.exists()) return [];
   return snap.data().items || [];
 }
 
-export async function setList(key, items) {
-  const ref = doc(db, "pharmacie", key);
+export async function setList(pharmacieId, key, items) {
+  const ref = doc(db, "pharmacies", pharmacieId, "data", key);
   await setDoc(ref, { items });
 }
 
-// Écoute en temps réel : dès qu'un membre de l'équipe modifie une donnée,
-// tous les autres appareils connectés voient la mise à jour instantanément.
-export function subscribeList(key, callback) {
-  const ref = doc(db, "pharmacie", key);
+export function subscribeList(pharmacieId, key, callback) {
+  const ref = doc(db, "pharmacies", pharmacieId, "data", key);
   return onSnapshot(ref, (snap) => {
     callback(snap.exists() ? snap.data().items || [] : []);
   });
