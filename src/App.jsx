@@ -1,35 +1,16 @@
 import Auth from "./Auth.jsx";
-import { getList, setList, subscribeList } from "./firebase.js";
-import { ecouterConnexion, deconnecter } from "./firebase.js";
+import {
+  seedMedsIfEmpty, subscribeMeds, addMed, updateMed, deleteMed,
+  subscribeSales, finaliserVente,
+  subscribeClients, addClient, updateClient, deleteClient,
+  ecouterConnexion, deconnecter,
+} from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch
 } from "lucide-react";
-
-// ---------- Storage helpers (Firebase Firestore, partagé en temps réel) ----------
-const SKEY = {
-  meds: "medicaments",
-  sales: "ventes",
-  clients: "clients",
-};
-
-async function loadList(pharmacieId, key) {
-  try {
-    return await getList(pharmacieId, key);
-  } catch (e) {
-    console.error("Erreur de lecture Firebase", e);
-    return [];
-  }
-}
-async function saveList(pharmacieId, key, value) {
-  try {
-    await setList(pharmacieId, key, value);
-  } catch (e) {
-    console.error("Erreur de sauvegarde Firebase", e);
-  }
-}
 
 // ---------- Utility ----------
 const fmtFCFA = (n) =>
@@ -65,22 +46,22 @@ const CATEGORIES = [
 // ---------- Seed data (only used if storage is empty, first run) ----------
 const seedMeds = () => ([
   {
-    id: uid(), name: "Paracétamol 500mg", category: "Antalgique",
+    name: "Paracétamol 500mg", category: "Antalgique",
     unit: "Boîte de 20", quantity: 84, minStock: 20, price: 500,
     expiry: addDays(60), supplier: "LABOREX",
   },
   {
-    id: uid(), name: "Amoxicilline 500mg", category: "Antibiotique",
+    name: "Amoxicilline 500mg", category: "Antibiotique",
     unit: "Boîte de 12", quantity: 12, minStock: 15, price: 1200,
     expiry: addDays(20), supplier: "UBIPHARM",
   },
   {
-    id: uid(), name: "Coartem (ACT)", category: "Antipaludique",
+    name: "Coartem (ACT)", category: "Antipaludique",
     unit: "Plaquette", quantity: 30, minStock: 10, price: 2500,
     expiry: addDays(240), supplier: "PHARMIVOIRE",
   },
   {
-    id: uid(), name: "Bétadine solution", category: "Antiseptique",
+    name: "Bétadine solution", category: "Antiseptique",
     unit: "Flacon 125ml", quantity: 5, minStock: 8, price: 1800,
     expiry: addDays(-5), supplier: "LABOREX",
   },
@@ -185,25 +166,22 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
     // Premier chargement : si le stock est vide (tout premier lancement
     // pour cette pharmacie), on insère quelques médicaments d'exemple.
     (async () => {
-      const existing = await loadList(pharmacieId, SKEY.meds);
-      if (existing.length === 0) {
-        await saveList(pharmacieId, SKEY.meds, seedMeds());
-      }
+      await seedMedsIfEmpty(pharmacieId, seedMeds());
     })();
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
-    const unsubMeds = subscribeList(pharmacieId, SKEY.meds, (data) => {
+    const unsubMeds = subscribeMeds(pharmacieId, (data) => {
       setMeds(data);
       medsReady = true;
       checkAllReady();
     });
-    const unsubSales = subscribeList(pharmacieId, SKEY.sales, (data) => {
+    const unsubSales = subscribeSales(pharmacieId, (data) => {
       setSales(data);
       salesReady = true;
       checkAllReady();
     });
-    const unsubClients = subscribeList(pharmacieId, SKEY.clients, (data) => {
+    const unsubClients = subscribeClients(pharmacieId, (data) => {
       setClients(data);
       clientsReady = true;
       checkAllReady();
@@ -220,19 +198,6 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
     setToast({ msg, tone, id: uid() });
     setTimeout(() => setToast(null), 2600);
   }, []);
-
-  const persistMeds = useCallback(async (next) => {
-    setMeds(next);
-    await saveList(pharmacieId, SKEY.meds, next);
-  }, [pharmacieId]);
-  const persistSales = useCallback(async (next) => {
-    setSales(next);
-    await saveList(pharmacieId, SKEY.sales, next);
-  }, [pharmacieId]);
-  const persistClients = useCallback(async (next) => {
-    setClients(next);
-    await saveList(pharmacieId, SKEY.clients, next);
-  }, [pharmacieId]);
 
   const lowStock = useMemo(() => meds.filter((m) => m.quantity <= m.minStock), [meds]);
   const expiringSoon = useMemo(
@@ -307,17 +272,16 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
           />
         )}
         {tab === "stock" && (
-          <Stock meds={meds} persistMeds={persistMeds} notify={notify} lowStock={lowStock} />
+          <Stock meds={meds} pharmacieId={pharmacieId} notify={notify} lowStock={lowStock} />
         )}
         {tab === "ventes" && (
           <Ventes
-            meds={meds} persistMeds={persistMeds}
-            sales={sales} persistSales={persistSales}
-            clients={clients} notify={notify}
+            meds={meds} sales={sales} clients={clients}
+            pharmacieId={pharmacieId} notify={notify}
           />
         )}
         {tab === "clients" && (
-          <Clients clients={clients} persistClients={persistClients} sales={sales} notify={notify} />
+          <Clients clients={clients} pharmacieId={pharmacieId} sales={sales} notify={notify} />
         )}
         {tab === "rapports" && (
           <Rapports sales={sales} meds={meds} />
@@ -410,7 +374,7 @@ function PageHead({ title, sub, action }) {
 }
 
 // ================= STOCK =================
-function Stock({ meds, persistMeds, notify, lowStock }) {
+function Stock({ meds, pharmacieId, notify, lowStock }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Tous");
   const [modal, setModal] = useState(null); // { mode: 'new'|'edit', data }
@@ -424,18 +388,19 @@ function Stock({ meds, persistMeds, notify, lowStock }) {
   }, [meds, query, filter]);
 
   async function handleSave(data) {
-    if (data.id) {
-      await persistMeds(meds.map((m) => (m.id === data.id ? data : m)));
+    const { id, ...rest } = data;
+    if (id) {
+      await updateMed(pharmacieId, id, rest);
       notify("Médicament mis à jour.");
     } else {
-      await persistMeds([...meds, { ...data, id: uid() }]);
+      await addMed(pharmacieId, rest);
       notify("Médicament ajouté au stock.");
     }
     setModal(null);
   }
 
   async function handleDelete(id) {
-    await persistMeds(meds.filter((m) => m.id !== id));
+    await deleteMed(pharmacieId, id);
     notify("Médicament supprimé.", "danger");
     setConfirmDelete(null);
   }
@@ -587,7 +552,7 @@ function MedModal({ mode, data, onClose, onSave }) {
 }
 
 // ================= VENTES (POS) =================
-function Ventes({ meds, persistMeds, sales, persistSales, clients, notify }) {
+function Ventes({ meds, sales, clients, pharmacieId, notify }) {
   const [cart, setCart] = useState([]); // {medId, name, price, qty, maxQty}
   const [query, setQuery] = useState("");
   const [clientName, setClientName] = useState("");
@@ -635,23 +600,19 @@ function Ventes({ meds, persistMeds, sales, persistSales, clients, notify }) {
 
   async function finalizeSale() {
     if (cart.length === 0) return;
-    const sale = {
-      id: uid(),
-      date: todayISO(),
-      time: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-      client: clientName.trim() || "Client de passage",
-      items: cart.map((i) => ({ medId: i.medId, name: i.name, price: i.price, qty: i.qty })),
-      total,
-    };
-    const nextMeds = meds.map((m) => {
-      const item = cart.find((i) => i.medId === m.id);
-      return item ? { ...m, quantity: m.quantity - item.qty } : m;
-    });
-    await persistMeds(nextMeds);
-    await persistSales([sale, ...sales]);
-    notify(`Vente enregistrée · ${fmtFCFA(total)}`);
-    setCart([]);
-    setClientName("");
+    try {
+      await finaliserVente(pharmacieId, cart, {
+        date: todayISO(),
+        time: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+        client: clientName.trim() || "Client de passage",
+        total,
+      });
+      notify(`Vente enregistrée · ${fmtFCFA(total)}`);
+      setCart([]);
+      setClientName("");
+    } catch (e) {
+      notify(e.message || "Erreur lors de la vente.", "danger");
+    }
   }
 
   return (
@@ -769,25 +730,26 @@ function SalesHistory({ sales }) {
 }
 
 // ================= CLIENTS =================
-function Clients({ clients, persistClients, sales, notify }) {
+function Clients({ clients, pharmacieId, sales, notify }) {
   const [modal, setModal] = useState(null);
   const [query, setQuery] = useState("");
 
   const filtered = clients.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
 
   async function handleSave(data) {
-    if (data.id) {
-      await persistClients(clients.map((c) => (c.id === data.id ? data : c)));
+    const { id, ...rest } = data;
+    if (id) {
+      await updateClient(pharmacieId, id, rest);
       notify("Fiche client mise à jour.");
     } else {
-      await persistClients([...clients, { ...data, id: uid() }]);
+      await addClient(pharmacieId, rest);
       notify("Client ajouté.");
     }
     setModal(null);
   }
 
   async function handleDelete(id) {
-    await persistClients(clients.filter((c) => c.id !== id));
+    await deleteClient(pharmacieId, id);
     notify("Client supprimé.", "danger");
   }
 
