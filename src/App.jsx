@@ -1,10 +1,12 @@
+import Auth from "./Auth.jsx";
+import { getList, setList, subscribeList } from "./firebase.js";
+import { ecouterConnexion, deconnecter } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch
 } from "lucide-react";
-import { getList, setList, subscribeList } from "./firebase.js";
 
 // ---------- Storage helpers (Firebase Firestore, partagé en temps réel) ----------
 const SKEY = {
@@ -13,17 +15,17 @@ const SKEY = {
   clients: "clients",
 };
 
-async function loadList(key) {
+async function loadList(pharmacieId, key) {
   try {
-    return await getList(key);
+    return await getList(pharmacieId, key);
   } catch (e) {
     console.error("Erreur de lecture Firebase", e);
     return [];
   }
 }
-async function saveList(key, value) {
+async function saveList(pharmacieId, key, value) {
   try {
-    await setList(key, value);
+    await setList(pharmacieId, key, value);
   } catch (e) {
     console.error("Erreur de sauvegarde Firebase", e);
   }
@@ -136,8 +138,37 @@ function StatCard({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
+// ================= ROOT APP (gère l'authentification) =================
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    const unsub = ecouterConnexion((u) => {
+      setUser(u);
+      setCheckingAuth(false);
+    });
+    return () => unsub();
+  }, []);
+
+  if (checkingAuth) {
+    return (
+      <div className="app-shell loading-shell">
+        <Style />
+        <div className="loader">Chargement…</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Auth />;
+  }
+
+  return <PharmacieApp pharmacieId={user.uid} pharmacieEmail={user.email} />;
+}
+
 // ================= MAIN APP =================
-export default function PharmacieApp() {
+function PharmacieApp({ pharmacieId, pharmacieEmail }) {
   const [tab, setTab] = useState("dashboard");
   const [meds, setMeds] = useState([]);
   const [sales, setSales] = useState([]);
@@ -151,28 +182,28 @@ export default function PharmacieApp() {
       if (medsReady && salesReady && clientsReady) setLoading(false);
     };
 
-    // Premier chargement : si le stock est vide (tout premier lancement),
-    // on insère quelques médicaments d'exemple.
+    // Premier chargement : si le stock est vide (tout premier lancement
+    // pour cette pharmacie), on insère quelques médicaments d'exemple.
     (async () => {
-      const existing = await loadList(SKEY.meds);
+      const existing = await loadList(pharmacieId, SKEY.meds);
       if (existing.length === 0) {
-        await saveList(SKEY.meds, seedMeds());
+        await saveList(pharmacieId, SKEY.meds, seedMeds());
       }
     })();
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
-    const unsubMeds = subscribeList(SKEY.meds, (data) => {
+    const unsubMeds = subscribeList(pharmacieId, SKEY.meds, (data) => {
       setMeds(data);
       medsReady = true;
       checkAllReady();
     });
-    const unsubSales = subscribeList(SKEY.sales, (data) => {
+    const unsubSales = subscribeList(pharmacieId, SKEY.sales, (data) => {
       setSales(data);
       salesReady = true;
       checkAllReady();
     });
-    const unsubClients = subscribeList(SKEY.clients, (data) => {
+    const unsubClients = subscribeList(pharmacieId, SKEY.clients, (data) => {
       setClients(data);
       clientsReady = true;
       checkAllReady();
@@ -183,7 +214,7 @@ export default function PharmacieApp() {
       unsubSales();
       unsubClients();
     };
-  }, []);
+  }, [pharmacieId]);
 
   const notify = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone, id: uid() });
@@ -192,16 +223,16 @@ export default function PharmacieApp() {
 
   const persistMeds = useCallback(async (next) => {
     setMeds(next);
-    await saveList(SKEY.meds, next);
-  }, []);
+    await saveList(pharmacieId, SKEY.meds, next);
+  }, [pharmacieId]);
   const persistSales = useCallback(async (next) => {
     setSales(next);
-    await saveList(SKEY.sales, next);
-  }, []);
+    await saveList(pharmacieId, SKEY.sales, next);
+  }, [pharmacieId]);
   const persistClients = useCallback(async (next) => {
     setClients(next);
-    await saveList(SKEY.clients, next);
-  }, []);
+    await saveList(pharmacieId, SKEY.clients, next);
+  }, [pharmacieId]);
 
   const lowStock = useMemo(() => meds.filter((m) => m.quantity <= m.minStock), [meds]);
   const expiringSoon = useMemo(
@@ -260,8 +291,9 @@ export default function PharmacieApp() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          <div className="foot-line">Équipe · 2-5 utilisateurs</div>
+          <div className="foot-line">{pharmacieEmail}</div>
           <div className="foot-line foot-dim">Données synchronisées</div>
+          <button className="logout-btn" onClick={() => deconnecter()}>Se déconnecter</button>
         </div>
       </aside>
 
@@ -979,8 +1011,14 @@ function Style() {
         padding: 1px 6px;
       }
       .sidebar-foot { border-top: 1px solid rgba(255,255,255,0.12); padding-top: 12px; margin-top: 8px; }
-      .foot-line { font-size: 11px; color: #cfd9d1; }
+      .foot-line { font-size: 11px; color: #cfd9d1; word-break: break-all; }
       .foot-dim { opacity: 0.6; margin-top: 2px; }
+      .logout-btn {
+        margin-top: 10px; width: 100%; background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.15); color: #f3f1e9;
+        padding: 7px; border-radius: 7px; font-size: 12px; cursor: pointer;
+      }
+      .logout-btn:hover { background: rgba(255,255,255,0.16); }
 
       .main { flex: 1; padding: 26px 30px; overflow-y: auto; max-height: 900px; }
       .page { display: flex; flex-direction: column; gap: 20px; }
