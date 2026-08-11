@@ -1,7 +1,9 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, deleteApp } from "firebase/app";
 import {
   getFirestore,
   doc,
+  setDoc,
+  getDoc,
   collection,
   addDoc,
   updateDoc,
@@ -40,10 +42,17 @@ export const auth = getAuth(app);
 // ---------------------------------------------------------------
 export async function inscrirePharmacie(email, password, nomPharmacie) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
-  await addDoc(collection(db, "pharmacies", cred.user.uid, "meta"), {
+  const uid = cred.user.uid;
+  await addDoc(collection(db, "pharmacies", uid, "meta"), {
     nom: nomPharmacie,
     email,
     creeLe: new Date().toISOString(),
+  });
+  // La personne qui crée la pharmacie est automatiquement "gérant",
+  // avec accès complet (y compris la gestion de l'équipe).
+  await setDoc(doc(db, "acces", uid), { pharmacieId: uid, role: "gerant", email });
+  await setDoc(doc(db, "pharmacies", uid, "membres", uid), {
+    email, role: "gerant", creeLe: new Date().toISOString(),
   });
   return cred.user;
 }
@@ -60,6 +69,72 @@ export async function deconnecter() {
 // mot de passe. On n'a rien d'autre à héberger nous-mêmes.
 export async function reinitialiserMotDePasse(email) {
   await sendPasswordResetEmail(auth, email);
+}
+
+// ---------------------------------------------------------------
+// ÉQUIPE — un gérant peut inviter des employés (caissiers). Chaque
+// employé se connecte avec SON PROPRE email/mot de passe, mais accède
+// aux données de la MÊME pharmacie. On retrouve la pharmacie et le
+// rôle d'un utilisateur via le document pharmacies/{pharmacieId} :
+// désormais via la collection "acces/{uid}".
+// ---------------------------------------------------------------
+
+// Retrouve la pharmacie et le rôle associés au compte connecté.
+// Retourne null si le compte n'a pas encore de document d'accès
+// (cas des comptes créés avant l'ajout de la gestion d'équipe).
+export async function getAcces(uid) {
+  const snap = await getDoc(doc(db, "acces", uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+// Crée le document d'accès manquant pour un compte existant (créé
+// avant la gestion d'équipe) — le rend "gérant" de sa propre pharmacie,
+// comme c'était implicitement le cas jusqu'ici.
+export async function reparerAccesExistant(uid, email) {
+  await setDoc(doc(db, "acces", uid), { pharmacieId: uid, role: "gerant", email });
+  await setDoc(doc(db, "pharmacies", uid, "membres", uid), {
+    email, role: "gerant", creeLe: new Date().toISOString(),
+  });
+}
+
+// Crée le compte Firebase de l'employé SANS déconnecter le gérant :
+// on utilise une instance Firebase secondaire, isolée de la session
+// principale, uniquement pour cette création de compte.
+export async function inviterEmploye(pharmacieId, email, password, role) {
+  const secondaryApp = initializeApp(firebaseConfig, "invite-" + Date.now());
+  const secondaryAuth = getAuth(secondaryApp);
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+    const nouvelUid = cred.user.uid;
+
+    await setDoc(doc(db, "acces", nouvelUid), { pharmacieId, role, email });
+    await setDoc(doc(db, "pharmacies", pharmacieId, "membres", nouvelUid), {
+      email, role, creeLe: new Date().toISOString(),
+    });
+
+    return nouvelUid;
+  } finally {
+    // On referme proprement la session secondaire, sans jamais toucher
+    // à la session principale du gérant.
+    await signOut(secondaryAuth);
+    await deleteApp(secondaryApp);
+  }
+}
+
+export function subscribeMembres(pharmacieId, callback) {
+  const ref = collection(db, "pharmacies", pharmacieId, "membres");
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+// Retire un employé de l'équipe. Remarque : son compte Firebase
+// Authentication n'est pas supprimé (cela nécessite un accès admin
+// côté serveur) — il perd simplement l'accès aux données de la
+// pharmacie.
+export async function retirerEmploye(pharmacieId, uid) {
+  await deleteDoc(doc(db, "pharmacies", pharmacieId, "membres", uid));
+  await deleteDoc(doc(db, "acces", uid));
 }
 export function ecouterConnexion(callback) {
   return onAuthStateChanged(auth, callback);
