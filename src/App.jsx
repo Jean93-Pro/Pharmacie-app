@@ -277,7 +277,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
         {tab === "ventes" && (
           <Ventes
             meds={meds} sales={sales} clients={clients}
-            pharmacieId={pharmacieId} notify={notify}
+            pharmacieId={pharmacieId} pharmacieEmail={pharmacieEmail} notify={notify}
           />
         )}
         {tab === "clients" && (
@@ -552,11 +552,12 @@ function MedModal({ mode, data, onClose, onSave }) {
 }
 
 // ================= VENTES (POS) =================
-function Ventes({ meds, sales, clients, pharmacieId, notify }) {
+function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
   const [cart, setCart] = useState([]); // {medId, name, price, qty, maxQty}
   const [query, setQuery] = useState("");
   const [clientName, setClientName] = useState("");
   const [history, setHistory] = useState(false);
+  const [receiptSale, setReceiptSale] = useState(null);
 
   const results = useMemo(() => {
     if (!query.trim()) return [];
@@ -600,14 +601,17 @@ function Ventes({ meds, sales, clients, pharmacieId, notify }) {
 
   async function finalizeSale() {
     if (cart.length === 0) return;
+    const saleMeta = {
+      date: todayISO(),
+      time: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+      client: clientName.trim() || "Client de passage",
+      total,
+    };
+    const items = cart.map((i) => ({ medId: i.medId, name: i.name, price: i.price, qty: i.qty }));
     try {
-      await finaliserVente(pharmacieId, cart, {
-        date: todayISO(),
-        time: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-        client: clientName.trim() || "Client de passage",
-        total,
-      });
+      const saleId = await finaliserVente(pharmacieId, cart, saleMeta);
       notify(`Vente enregistrée · ${fmtFCFA(total)}`);
+      setReceiptSale({ id: saleId, ...saleMeta, items });
       setCart([]);
       setClientName("");
     } catch (e) {
@@ -628,7 +632,7 @@ function Ventes({ meds, sales, clients, pharmacieId, notify }) {
       />
 
       {history ? (
-        <SalesHistory sales={sales} />
+        <SalesHistory sales={sales} onPrint={setReceiptSale} />
       ) : (
         <div className="pos-grid">
           <div className="panel">
@@ -701,17 +705,25 @@ function Ventes({ meds, sales, clients, pharmacieId, notify }) {
           </div>
         </div>
       )}
+
+      {receiptSale && (
+        <ReceiptModal
+          sale={receiptSale}
+          pharmacieEmail={pharmacieEmail}
+          onClose={() => setReceiptSale(null)}
+        />
+      )}
     </div>
   );
 }
 
-function SalesHistory({ sales }) {
+function SalesHistory({ sales, onPrint }) {
   if (sales.length === 0) return <EmptyRow text="Aucune vente enregistrée pour le moment." />;
   return (
     <div className="table-wrap">
       <table className="table">
         <thead>
-          <tr><th>Date</th><th>Heure</th><th>Client</th><th>Articles</th><th>Total</th></tr>
+          <tr><th>Date</th><th>Heure</th><th>Client</th><th>Articles</th><th>Total</th><th></th></tr>
         </thead>
         <tbody>
           {sales.map((s) => (
@@ -721,10 +733,63 @@ function SalesHistory({ sales }) {
               <td>{s.client}</td>
               <td className="td-sub">{s.items.map((i) => `${i.name} ×${i.qty}`).join(", ")}</td>
               <td className="td-strong">{fmtFCFA(s.total)}</td>
+              <td className="td-actions">
+                <button className="icon-btn" onClick={() => onPrint(s)} aria-label="Imprimer le reçu">
+                  <ReceiptText size={14} />
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ================= REÇU (impression) =================
+function ReceiptModal({ sale, pharmacieEmail, onClose }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-panel receipt-modal">
+        <div className="modal-head no-print">
+          <h3>Reçu de vente</h3>
+          <button className="icon-btn" onClick={onClose} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <div className="modal-body receipt-print">
+          <div className="receipt-header">
+            <div className="receipt-brand">℞ Officine</div>
+            <div className="receipt-sub">{pharmacieEmail}</div>
+          </div>
+          <div className="receipt-meta">
+            <div>{sale.date} · {sale.time}</div>
+            <div>Client : {sale.client}</div>
+          </div>
+          <table className="receipt-table">
+            <thead>
+              <tr><th>Article</th><th>Qté</th><th>P.U.</th><th>Total</th></tr>
+            </thead>
+            <tbody>
+              {sale.items.map((i, idx) => (
+                <tr key={idx}>
+                  <td>{i.name}</td>
+                  <td>{i.qty}</td>
+                  <td>{fmtFCFA(i.price)}</td>
+                  <td>{fmtFCFA(i.price * i.qty)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="receipt-total-row">
+            <span>Total</span>
+            <span>{fmtFCFA(sale.total)}</span>
+          </div>
+          <div className="receipt-footer">Merci de votre confiance.</div>
+        </div>
+        <div className="modal-actions no-print">
+          <button className="btn-ghost" onClick={onClose}>Fermer</button>
+          <button className="btn-primary" onClick={() => window.print()}>Imprimer</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1115,6 +1180,24 @@ function Style() {
         .sidebar-foot { display: none; }
         .brand-sub { display: none; }
         .stat-grid, .two-col, .pos-grid, .form-grid { grid-template-columns: 1fr; }
+      }
+
+      .receipt-modal { width: 340px; }
+      .receipt-header { text-align: center; margin-bottom: 10px; }
+      .receipt-brand { font-family: Georgia, serif; font-weight: 700; font-size: 16px; color: var(--teal-deep); }
+      .receipt-sub { font-size: 11px; color: var(--ink-soft); }
+      .receipt-meta { font-size: 12px; color: var(--ink-soft); margin-bottom: 10px; display: flex; flex-direction: column; gap: 2px; }
+      .receipt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+      .receipt-table th { text-align: left; border-bottom: 1px solid var(--line); padding: 4px 2px; font-size: 10.5px; text-transform: uppercase; color: var(--ink-soft); }
+      .receipt-table td { padding: 4px 2px; border-bottom: 1px dashed var(--line); }
+      .receipt-total-row { display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; padding-top: 6px; }
+      .receipt-footer { text-align: center; font-size: 11px; color: var(--ink-soft); margin-top: 14px; }
+
+      @media print {
+        body * { visibility: hidden; }
+        .receipt-print, .receipt-print * { visibility: visible; }
+        .receipt-print { position: absolute; top: 0; left: 0; width: 100%; padding: 20px; }
+        .no-print { display: none !important; }
       }
     `}</style>
   );
