@@ -4,12 +4,14 @@ import {
   subscribeSales, finaliserVente,
   subscribeClients, addClient, updateClient, deleteClient,
   ecouterConnexion, deconnecter,
+  getAcces, reparerAccesExistant, inviterEmploye, subscribeMembres, retirerEmploye,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
-  TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch
+  TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
+  UserPlus, ShieldCheck
 } from "lucide-react";
 
 // ---------- Utility ----------
@@ -122,11 +124,24 @@ function StatCard({ icon: Icon, label, value, sub, tone }) {
 // ================= ROOT APP (gère l'authentification) =================
 export default function App() {
   const [user, setUser] = useState(null);
+  const [acces, setAcces] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
 
   useEffect(() => {
-    const unsub = ecouterConnexion((u) => {
+    const unsub = ecouterConnexion(async (u) => {
       setUser(u);
+      if (u) {
+        let a = await getAcces(u.uid);
+        if (!a) {
+          // Compte créé avant la gestion d'équipe : on le répare en le
+          // rendant gérant de sa propre pharmacie, comme avant.
+          await reparerAccesExistant(u.uid, u.email);
+          a = { pharmacieId: u.uid, role: "gerant", email: u.email };
+        }
+        setAcces(a);
+      } else {
+        setAcces(null);
+      }
       setCheckingAuth(false);
     });
     return () => unsub();
@@ -141,15 +156,21 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (!user || !acces) {
     return <Auth />;
   }
 
-  return <PharmacieApp pharmacieId={user.uid} pharmacieEmail={user.email} />;
+  return (
+    <PharmacieApp
+      pharmacieId={acces.pharmacieId}
+      pharmacieEmail={user.email}
+      role={acces.role}
+    />
+  );
 }
 
 // ================= MAIN APP =================
-function PharmacieApp({ pharmacieId, pharmacieEmail }) {
+function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [tab, setTab] = useState("dashboard");
   const [meds, setMeds] = useState([]);
   const [sales, setSales] = useState([]);
@@ -226,7 +247,8 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
     { id: "stock", label: "Stock", icon: Package },
     { id: "ventes", label: "Ventes", icon: ShoppingCart },
     { id: "clients", label: "Clients", icon: Users },
-    { id: "rapports", label: "Rapports", icon: BarChart3 },
+    ...(role === "gerant" ? [{ id: "rapports", label: "Rapports", icon: BarChart3 }] : []),
+    ...(role === "gerant" ? [{ id: "equipe", label: "Équipe", icon: UserPlus }] : []),
   ];
 
   return (
@@ -257,7 +279,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
         </nav>
         <div className="sidebar-foot">
           <div className="foot-line">{pharmacieEmail}</div>
-          <div className="foot-line foot-dim">Données synchronisées</div>
+          <div className="foot-line foot-dim">{role === "gerant" ? "Gérant" : "Caissier"} · Données synchronisées</div>
           <button className="logout-btn" onClick={() => deconnecter()}>Se déconnecter</button>
         </div>
       </aside>
@@ -283,8 +305,11 @@ function PharmacieApp({ pharmacieId, pharmacieEmail }) {
         {tab === "clients" && (
           <Clients clients={clients} pharmacieId={pharmacieId} sales={sales} notify={notify} />
         )}
-        {tab === "rapports" && (
+        {tab === "rapports" && role === "gerant" && (
           <Rapports sales={sales} meds={meds} />
+        )}
+        {tab === "equipe" && role === "gerant" && (
+          <Equipe pharmacieId={pharmacieId} notify={notify} />
         )}
       </main>
 
@@ -899,7 +924,140 @@ function ClientModal({ data, onClose, onSave }) {
   );
 }
 
-// ================= RAPPORTS =================
+// ================= ÉQUIPE =================
+function Equipe({ pharmacieId, notify }) {
+  const [membres, setMembres] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeMembres(pharmacieId, (data) => {
+      setMembres(data);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [pharmacieId]);
+
+  async function handleInvite(form) {
+    try {
+      await inviterEmploye(pharmacieId, form.email, form.password, form.role);
+      notify("Employé invité avec succès.");
+      setModal(false);
+    } catch (e) {
+      notify(traduireErreurInvite(e.code), "danger");
+    }
+  }
+
+  async function handleRemove(uid) {
+    await retirerEmploye(pharmacieId, uid);
+    notify("Employé retiré de l'équipe.", "danger");
+  }
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Équipe"
+        sub={`${membres.length} membre(s)`}
+        action={
+          <button className="btn-primary" onClick={() => setModal(true)}>
+            <UserPlus size={16} /> Inviter un employé
+          </button>
+        }
+      />
+
+      {loading ? (
+        <EmptyRow text="Chargement de l'équipe…" />
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr><th>Email</th><th>Rôle</th><th></th></tr>
+            </thead>
+            <tbody>
+              {membres.map((m) => (
+                <tr key={m.id}>
+                  <td className="td-strong">{m.email}</td>
+                  <td>
+                    <Badge tone={m.role === "gerant" ? "ok" : "neutral"}>
+                      {m.role === "gerant" ? "Gérant" : "Caissier"}
+                    </Badge>
+                  </td>
+                  <td className="td-actions">
+                    {m.role !== "gerant" && (
+                      <button className="icon-btn icon-danger" onClick={() => handleRemove(m.id)} aria-label="Retirer">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modal && (
+        <InviteModal onClose={() => setModal(false)} onSave={handleInvite} />
+      )}
+    </div>
+  );
+}
+
+function InviteModal({ onClose, onSave }) {
+  const [form, setForm] = useState({ email: "", password: "", role: "caissier" });
+  const [chargement, setChargement] = useState(false);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  async function submit() {
+    setChargement(true);
+    await onSave(form);
+    setChargement(false);
+  }
+
+  return (
+    <Modal title="Inviter un employé" onClose={onClose}>
+      <div className="form-grid form-grid-1">
+        <Field label="Email de l'employé">
+          <input type="email" value={form.email} onChange={set("email")} placeholder="employe@exemple.com" />
+        </Field>
+        <Field label="Mot de passe temporaire">
+          <input type="text" value={form.password} onChange={set("password")} placeholder="6 caractères minimum" minLength={6} />
+        </Field>
+        <Field label="Rôle">
+          <select className="select" value={form.role} onChange={set("role")}>
+            <option value="caissier">Caissier — accès limité (pas de Rapports/Équipe)</option>
+            <option value="gerant">Gérant — accès complet</option>
+          </select>
+        </Field>
+        <div className="invite-hint">
+          <ShieldCheck size={14} />
+          Communiquez ce mot de passe temporaire à votre employé. Il pourra le changer via "Mot de passe oublié" à sa première connexion.
+        </div>
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button
+          className="btn-primary"
+          disabled={!form.email.trim() || form.password.length < 6 || chargement}
+          onClick={submit}
+        >
+          {chargement ? "Un instant…" : "Inviter"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function traduireErreurInvite(code) {
+  const map = {
+    "auth/email-already-in-use": "Cet email est déjà utilisé par un autre compte.",
+    "auth/invalid-email": "Adresse email invalide.",
+    "auth/weak-password": "Le mot de passe doit contenir au moins 6 caractères.",
+  };
+  return map[code] || "Une erreur est survenue lors de l'invitation.";
+}
+
+
 function Rapports({ sales, meds }) {
   const last7 = useMemo(() => {
     const days = [...Array(7)].map((_, idx) => {
@@ -1129,6 +1287,7 @@ function Style() {
 
       .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       .form-grid-1 { grid-template-columns: 1fr; }
+      .invite-hint { display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; color: var(--ink-soft); background: var(--sage); padding: 9px 10px; border-radius: 8px; line-height: 1.4; }
       .field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
       .field-label { color: var(--ink-soft); font-weight: 600; }
       .field input, .field select, .field textarea {
