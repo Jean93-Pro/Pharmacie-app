@@ -7,12 +7,24 @@ import {
   getAcces, reparerAccesExistant, inviterEmploye, subscribeMembres, retirerEmploye,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import * as XLSX from "xlsx";
 import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
-  UserPlus, ShieldCheck
+  UserPlus, ShieldCheck, Download
 } from "lucide-react";
+
+// Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
+// plusieurs feuilles de données. sheets: [{ name, rows }]
+function exportToExcel(sheets, filename) {
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(({ name, rows }) => {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  });
+  XLSX.writeFile(wb, filename);
+}
 
 // ---------- Utility ----------
 const fmtFCFA = (n) =>
@@ -430,15 +442,34 @@ function Stock({ meds, pharmacieId, notify, lowStock }) {
     setConfirmDelete(null);
   }
 
+  function handleExport() {
+    const rows = meds.map((m) => ({
+      "Médicament": m.name,
+      "Catégorie": m.category,
+      "Unité": m.unit,
+      "Quantité": m.quantity,
+      "Seuil d'alerte": m.minStock,
+      "Prix unitaire (FCFA)": m.price,
+      "Péremption": m.expiry,
+      "Fournisseur": m.supplier || "",
+    }));
+    exportToExcel([{ name: "Stock", rows }], `stock-${todayISO()}.xlsx`);
+  }
+
   return (
     <div className="page">
       <PageHead
         title="Stock"
         sub={`${meds.length} références · ${lowStock.length} sous le seuil minimum`}
         action={
-          <button className="btn-primary" onClick={() => setModal({ mode: "new", data: emptyMed() })}>
-            <Plus size={16} /> Ajouter un médicament
-          </button>
+          <div className="page-actions">
+            <button className="btn-ghost" onClick={handleExport}>
+              <Download size={16} /> Exporter
+            </button>
+            <button className="btn-primary" onClick={() => setModal({ mode: "new", data: emptyMed() })}>
+              <Plus size={16} /> Ajouter un médicament
+            </button>
+          </div>
         }
       />
 
@@ -624,6 +655,17 @@ function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
 
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
 
+  function handleExportSales() {
+    const rows = sales.map((s) => ({
+      "Date": s.date,
+      "Heure": s.time,
+      "Client": s.client,
+      "Articles": s.items.map((i) => `${i.name} x${i.qty}`).join(", "),
+      "Total (FCFA)": s.total,
+    }));
+    exportToExcel([{ name: "Ventes", rows }], `ventes-${todayISO()}.xlsx`);
+  }
+
   async function finalizeSale() {
     if (cart.length === 0) return;
     const saleMeta = {
@@ -650,9 +692,16 @@ function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
         title="Ventes"
         sub="Encaissement et historique"
         action={
-          <button className="btn-ghost" onClick={() => setHistory((h) => !h)}>
-            <ReceiptText size={16} /> {history ? "Retour à la caisse" : "Historique des ventes"}
-          </button>
+          <div className="page-actions">
+            {history && (
+              <button className="btn-ghost" onClick={handleExportSales}>
+                <Download size={16} /> Exporter
+              </button>
+            )}
+            <button className="btn-ghost" onClick={() => setHistory((h) => !h)}>
+              <ReceiptText size={16} /> {history ? "Retour à la caisse" : "Historique des ventes"}
+            </button>
+          </div>
         }
       />
 
@@ -1086,9 +1135,45 @@ function Rapports({ sales, meds }) {
   const totalSalesCount = sales.length;
   const avgTicket = totalSalesCount ? totalRevenue / totalSalesCount : 0;
 
+  function handleExport() {
+    const resume = [{
+      "Chiffre d'affaires total (FCFA)": totalRevenue,
+      "Ventes enregistrées": totalSalesCount,
+      "Panier moyen (FCFA)": Math.round(avgTicket),
+      "Valeur du stock (FCFA)": meds.reduce((sum, m) => sum + m.quantity * m.price, 0),
+    }];
+    const ventes = sales.map((s) => ({
+      "Date": s.date,
+      "Heure": s.time,
+      "Client": s.client,
+      "Articles": s.items.map((i) => `${i.name} x${i.qty}`).join(", "),
+      "Total (FCFA)": s.total,
+    }));
+    const produits = topProducts.map(([name, qty]) => ({
+      "Produit": name,
+      "Quantité vendue": qty,
+    }));
+    exportToExcel(
+      [
+        { name: "Résumé", rows: resume },
+        { name: "Ventes", rows: ventes },
+        { name: "Produits", rows: produits },
+      ],
+      `rapport-${todayISO()}.xlsx`
+    );
+  }
+
   return (
     <div className="page">
-      <PageHead title="Rapports" sub="Performance de l'officine" />
+      <PageHead
+        title="Rapports"
+        sub="Performance de l'officine"
+        action={
+          <button className="btn-ghost" onClick={handleExport}>
+            <Download size={16} /> Exporter
+          </button>
+        }
+      />
 
       <div className="stat-grid">
         <StatCard icon={TrendingUp} label="Chiffre d'affaires total" value={fmtFCFA(totalRevenue)} tone="teal" />
@@ -1210,6 +1295,7 @@ function Style() {
       .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
       .page-head h1 { font-family: Georgia, 'Times New Roman', serif; font-size: 24px; margin: 0; color: var(--teal-deep); }
       .page-head p { margin: 4px 0 0; font-size: 13px; color: var(--ink-soft); }
+      .page-actions { display: flex; gap: 8px; }
 
       .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
       .stat-card {
