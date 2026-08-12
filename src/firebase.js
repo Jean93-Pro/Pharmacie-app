@@ -132,7 +132,17 @@ export function subscribeMembres(pharmacieId, callback) {
 // Authentication n'est pas supprimé (cela nécessite un accès admin
 // côté serveur) — il perd simplement l'accès aux données de la
 // pharmacie.
+export async function // On ne supprime plus le document d'accès : on le marque comme
+// désactivé. Ça évite que l'ex-employé soit "réparé" automatiquement
+// en gérant d'une pharmacie vide à sa prochaine connexion.
 export async function retirerEmploye(pharmacieId, uid) {
+  await deleteDoc(doc(db, "pharmacies", pharmacieId, "membres", uid));
+  await setDoc(
+    doc(db, "acces", uid),
+    { pharmacieId, role: "retire", desactive: true },
+    { merge: true }
+  );
+}(pharmacieId, uid) {
   await deleteDoc(doc(db, "pharmacies", pharmacieId, "membres", uid));
   await deleteDoc(doc(db, "acces", uid));
 }
