@@ -12,7 +12,7 @@ import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
-  UserPlus, ShieldCheck, Download
+  UserPlus, ShieldCheck, Download, Upload
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -50,6 +50,16 @@ function expiryStatus(dateStr) {
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// Convertit une valeur de cellule Excel (Date, texte, ou vide) en
+// format YYYY-MM-DD utilisé partout dans l'appli.
+function parseExcelDate(val) {
+  if (!val) return todayISO();
+  if (val instanceof Date && !isNaN(val)) return val.toISOString().slice(0, 10);
+  const parsed = new Date(val);
+  if (!isNaN(parsed)) return parsed.toISOString().slice(0, 10);
+  return todayISO();
 }
 
 const CATEGORIES = [
@@ -456,6 +466,45 @@ function Stock({ meds, pharmacieId, notify, lowStock }) {
     exportToExcel([{ name: "Stock", rows }], `stock-${todayISO()}.xlsx`);
   }
 
+  async function handleImport(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array", cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet);
+
+      if (rows.length === 0) {
+        notify("Le fichier est vide ou dans un format non reconnu.", "danger");
+        return;
+      }
+
+      let count = 0;
+      for (const row of rows) {
+        const name = String(row["Médicament"] || "").trim();
+        if (!name) continue;
+        const med = {
+          name,
+          category: String(row["Catégorie"] || CATEGORIES[0]).trim(),
+          unit: String(row["Unité"] || "").trim(),
+          quantity: Number(row["Quantité"]) || 0,
+          minStock: Number(row["Seuil d'alerte"]) || 5,
+          price: Number(row["Prix unitaire (FCFA)"]) || 0,
+          expiry: parseExcelDate(row["Péremption"]),
+          supplier: String(row["Fournisseur"] || "").trim(),
+        };
+        await addMed(pharmacieId, med);
+        count++;
+      }
+      notify(`${count} médicament(s) importé(s) avec succès.`);
+    } catch (err) {
+      notify("Erreur lors de l'import. Vérifiez que le fichier suit bien le format d'export.", "danger");
+    } finally {
+      e.target.value = "";
+    }
+  }
+
   return (
     <div className="page">
       <PageHead
@@ -466,6 +515,10 @@ function Stock({ meds, pharmacieId, notify, lowStock }) {
             <button className="btn-ghost" onClick={handleExport}>
               <Download size={16} /> Exporter
             </button>
+            <label className="btn-ghost file-btn">
+              <Upload size={16} /> Importer
+              <input type="file" accept=".xlsx,.xls" onChange={handleImport} hidden />
+            </label>
             <button className="btn-primary" onClick={() => setModal({ mode: "new", data: emptyMed() })}>
               <Plus size={16} /> Ajouter un médicament
             </button>
@@ -1296,6 +1349,7 @@ function Style() {
       .page-head h1 { font-family: Georgia, 'Times New Roman', serif; font-size: 24px; margin: 0; color: var(--teal-deep); }
       .page-head p { margin: 4px 0 0; font-size: 13px; color: var(--ink-soft); }
       .page-actions { display: flex; gap: 8px; }
+      .file-btn { cursor: pointer; }
 
       .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
       .stat-card {
