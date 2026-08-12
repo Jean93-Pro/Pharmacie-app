@@ -128,13 +128,13 @@ export function subscribeMembres(pharmacieId, callback) {
   });
 }
 
-// Retire un employé de l'équipe. Remarque : son compte Firebase
-// Authentication n'est pas supprimé (cela nécessite un accès admin
-// côté serveur) — il perd simplement l'accès aux données de la
-// pharmacie.
-export async function // On ne supprime plus le document d'accès : on le marque comme
-// désactivé. Ça évite que l'ex-employé soit "réparé" automatiquement
-// en gérant d'une pharmacie vide à sa prochaine connexion.
+// Retire un employé de l'équipe. CORRIGÉ : on ne supprime plus le
+// document d'accès — on le marque "desactive". Le supprimer laissait
+// l'employé revenir automatiquement (via reparerAccesExistant, côté
+// App.jsx) comme gérant d'une pharmacie neuve à sa prochaine connexion.
+// Remarque : son compte Firebase Authentication n'est pas supprimé
+// (cela nécessite un accès admin côté serveur) — mais il ne peut plus
+// entrer dans l'application une fois désactivé.
 export async function retirerEmploye(pharmacieId, uid) {
   await deleteDoc(doc(db, "pharmacies", pharmacieId, "membres", uid));
   await setDoc(
@@ -142,9 +142,6 @@ export async function retirerEmploye(pharmacieId, uid) {
     { pharmacieId, role: "retire", desactive: true },
     { merge: true }
   );
-}(pharmacieId, uid) {
-  await deleteDoc(doc(db, "pharmacies", pharmacieId, "membres", uid));
-  await deleteDoc(doc(db, "acces", uid));
 }
 export function ecouterConnexion(callback) {
   return onAuthStateChanged(auth, callback);
