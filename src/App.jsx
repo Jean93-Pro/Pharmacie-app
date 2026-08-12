@@ -148,18 +148,34 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [acces, setAcces] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  // CORRIGÉ : un employé retiré de l'équipe (accès marqué "desactive"
+  // côté Firestore) ne doit plus jamais être "réparé" automatiquement
+  // en gérant d'une nouvelle pharmacie vide. On le déconnecte et on
+  // affiche un message clair au lieu de le laisser entrer.
+  const [accesRefuse, setAccesRefuse] = useState(false);
 
   useEffect(() => {
     const unsub = ecouterConnexion(async (u) => {
       setUser(u);
       if (u) {
         let a = await getAcces(u.uid);
+
+        if (a && a.desactive) {
+          await deconnecter();
+          setUser(null);
+          setAcces(null);
+          setAccesRefuse(true);
+          setCheckingAuth(false);
+          return;
+        }
+
         if (!a) {
           // Compte créé avant la gestion d'équipe : on le répare en le
           // rendant gérant de sa propre pharmacie, comme avant.
           await reparerAccesExistant(u.uid, u.email);
           a = { pharmacieId: u.uid, role: "gerant", email: u.email };
         }
+        setAccesRefuse(false);
         setAcces(a);
       } else {
         setAcces(null);
@@ -174,6 +190,17 @@ export default function App() {
       <div className="app-shell loading-shell">
         <Style />
         <div className="loader">Chargement…</div>
+      </div>
+    );
+  }
+
+  if (accesRefuse) {
+    return (
+      <div className="app-shell loading-shell">
+        <Style />
+        <div className="loader">
+          Votre accès à cette pharmacie a été révoqué. Contactez votre gérant.
+        </div>
       </div>
     );
   }
