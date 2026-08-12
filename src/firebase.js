@@ -14,6 +14,8 @@ import {
   serverTimestamp,
   query,
   orderBy,
+  limit,
+  increment,
 } from "firebase/firestore";
 import {
   getAuth,
@@ -197,6 +199,10 @@ export async function seedMedsIfEmpty(pharmacieId, seedItems) {
 // ---------------------------------------------------------------
 export async function finaliserVente(pharmacieId, cartItems, saleMeta) {
   const saleRef = doc(collection(db, "pharmacies", pharmacieId, "sales"));
+  // Compteurs globaux (CA total, nombre de ventes), mis à jour de façon
+  // atomique avec la vente. Rapports peut ainsi lire ces totaux en UNE
+  // seule lecture, sans jamais avoir à recharger tout l'historique.
+  const compteursRef = doc(db, "pharmacies", pharmacieId, "meta", "compteurs");
 
   await runTransaction(db, async (tx) => {
     const medRefs = cartItems.map((i) =>
@@ -224,9 +230,12 @@ export async function finaliserVente(pharmacieId, cartItems, saleMeta) {
       tx.update(medRefs[idx], { quantity: snap.data().quantity - item.qty });
     });
 
-    // 3) Enregistrer la vente
+    // 3) Enregistrer la vente — avec l'identité de l'employé qui l'a
+    // faite, pour que le gérant puisse toujours savoir qui a vendu quoi.
     tx.set(saleRef, {
       ...saleMeta,
+      employeEmail: auth.currentUser ? auth.currentUser.email : null,
+      employeUid: auth.currentUser ? auth.currentUser.uid : null,
       items: cartItems.map((i) => ({
         medId: i.medId,
         name: i.name,
@@ -235,18 +244,44 @@ export async function finaliserVente(pharmacieId, cartItems, saleMeta) {
       })),
       createdAt: serverTimestamp(),
     });
+
+    // 4) Incrémenter les compteurs globaux de la pharmacie
+    tx.set(
+      compteursRef,
+      {
+        totalRevenue: increment(saleMeta.total),
+        totalSalesCount: increment(1),
+      },
+      { merge: true }
+    );
   });
 
   return saleRef.id;
 }
 
-export function subscribeSales(pharmacieId, callback) {
+// Ne renvoie que les `max` ventes les plus récentes en temps réel —
+// pas tout l'historique. Une pharmacie active peut accumuler des
+// dizaines de milliers de ventes en quelques années ; les charger en
+// entier à chaque connexion ralentirait l'appli et ferait grimper les
+// coûts de lecture Firestore. Pour les totaux exacts sur toute la
+// durée de vie de la pharmacie, voir subscribeCompteurs ci-dessous.
+export function subscribeSales(pharmacieId, callback, max = 500) {
   const ref = query(
     collection(db, "pharmacies", pharmacieId, "sales"),
-    orderBy("createdAt", "desc")
+    orderBy("createdAt", "desc"),
+    limit(max)
   );
   return onSnapshot(ref, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+// CA total et nombre de ventes total, sur toute la durée de vie de la
+// pharmacie — une seule lecture, indépendante du nombre de ventes.
+export function subscribeCompteurs(pharmacieId, callback) {
+  const ref = doc(db, "pharmacies", pharmacieId, "meta", "compteurs");
+  return onSnapshot(ref, (snap) => {
+    callback(snap.exists() ? snap.data() : { totalRevenue: 0, totalSalesCount: 0 });
   });
 }
 
