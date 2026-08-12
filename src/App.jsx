@@ -5,6 +5,7 @@ import {
   subscribeClients, addClient, updateClient, deleteClient,
   ecouterConnexion, deconnecter,
   getAcces, reparerAccesExistant, inviterEmploye, subscribeMembres, retirerEmploye,
+  subscribeCompteurs,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -355,7 +356,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           <Clients clients={clients} pharmacieId={pharmacieId} sales={sales} notify={notify} />
         )}
         {tab === "rapports" && role === "gerant" && (
-          <Rapports sales={sales} meds={meds} />
+          <Rapports sales={sales} meds={meds} pharmacieId={pharmacieId} />
         )}
         {tab === "equipe" && role === "gerant" && (
           <Equipe pharmacieId={pharmacieId} notify={notify} />
@@ -877,7 +878,7 @@ function SalesHistory({ sales, onPrint }) {
     <div className="table-wrap">
       <table className="table">
         <thead>
-          <tr><th>Date</th><th>Heure</th><th>Client</th><th>Articles</th><th>Total</th><th></th></tr>
+          <tr><th>Date</th><th>Heure</th><th>Client</th><th>Vendu par</th><th>Articles</th><th>Total</th><th></th></tr>
         </thead>
         <tbody>
           {sales.map((s) => (
@@ -885,6 +886,7 @@ function SalesHistory({ sales, onPrint }) {
               <td>{s.date}</td>
               <td>{s.time}</td>
               <td>{s.client}</td>
+              <td className="td-sub">{s.employeEmail || "—"}</td>
               <td className="td-sub">{s.items.map((i) => `${i.name} ×${i.qty}`).join(", ")}</td>
               <td className="td-strong">{fmtFCFA(s.total)}</td>
               <td className="td-actions">
@@ -1187,7 +1189,17 @@ function traduireErreurInvite(code) {
 }
 
 
-function Rapports({ sales, meds }) {
+function Rapports({ sales, meds, pharmacieId }) {
+  // CA total et nombre de ventes sur TOUTE la durée de vie de la
+  // pharmacie — lus depuis un compteur global (1 lecture), plutôt que
+  // resommés depuis `sales`, qui ne contient que les ventes récentes.
+  const [compteurs, setCompteurs] = useState({ totalRevenue: 0, totalSalesCount: 0 });
+
+  useEffect(() => {
+    const unsub = subscribeCompteurs(pharmacieId, setCompteurs);
+    return () => unsub();
+  }, [pharmacieId]);
+
   const last7 = useMemo(() => {
     const days = [...Array(7)].map((_, idx) => {
       const d = new Date();
@@ -1203,6 +1215,9 @@ function Rapports({ sales, meds }) {
 
   const maxVal = Math.max(1, ...last7.map((d) => d.total));
 
+  // Basé sur `sales` (les ventes récentes chargées, voir subscribeSales) —
+  // suffisant pour un graphique 7 jours et un classement produits, même
+  // si la pharmacie a un historique de plusieurs années au total.
   const topProducts = useMemo(() => {
     const counts = {};
     sales.forEach((s) => s.items.forEach((i) => {
@@ -1211,8 +1226,8 @@ function Rapports({ sales, meds }) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6);
   }, [sales]);
 
-  const totalRevenue = sales.reduce((sum, s) => sum + s.total, 0);
-  const totalSalesCount = sales.length;
+  const totalRevenue = compteurs.totalRevenue || 0;
+  const totalSalesCount = compteurs.totalSalesCount || 0;
   const avgTicket = totalSalesCount ? totalRevenue / totalSalesCount : 0;
 
   function handleExport() {
