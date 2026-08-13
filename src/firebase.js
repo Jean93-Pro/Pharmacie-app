@@ -353,3 +353,11 @@ export async function creerLienPaiement(pharmacieId, plan) {
   const res = await appelable({ pharmacieId, plan });
   return res.data.paymentUrl;
 }
+
+// Même principe, mais via Stripe Checkout (carte bancaire) — pour les
+// pharmacies hors de la zone Mobile Money d'Afrique de l'Ouest.
+export async function creerLienPaiementStripe(pharmacieId, plan) {
+  const appelable = httpsCallable(functions, "creerPaiementStripe");
+  const res = await appelable({ pharmacieId, plan });
+  return res.data.paymentUrl;
+}
