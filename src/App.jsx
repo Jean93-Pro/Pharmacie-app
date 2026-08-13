@@ -6,6 +6,7 @@ import {
   ecouterConnexion, deconnecter,
   getAcces, reparerAccesExistant, inviterEmploye, subscribeMembres, retirerEmploye,
   subscribeCompteurs,
+  subscribeAbonnement, demarrerEssaiGratuit, creerLienPaiement, creerLienPaiementStripe,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -13,7 +14,7 @@ import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
-  UserPlus, ShieldCheck, Download, Upload
+  UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -227,6 +228,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
+  const [abonnement, setAbonnement] = useState(null);
 
   useEffect(() => {
     let medsReady = false, salesReady = false, clientsReady = false;
@@ -236,9 +238,14 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
 
     // Premier chargement : si le stock est vide (tout premier lancement
     // pour cette pharmacie), on insère quelques médicaments d'exemple.
+    // On démarre aussi la période d'essai gratuite si elle n'existe pas
+    // encore (ne fait rien si un abonnement existe déjà).
     (async () => {
       await seedMedsIfEmpty(pharmacieId, seedMeds());
+      await demarrerEssaiGratuit(pharmacieId);
     })();
+
+    const unsubAbonnement = subscribeAbonnement(pharmacieId, setAbonnement);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -262,6 +269,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubMeds();
       unsubSales();
       unsubClients();
+      unsubAbonnement();
     };
   }, [pharmacieId]);
 
@@ -276,6 +284,20 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     () => meds.filter((m) => daysUntil(m.expiry) <= 30).sort((a, b) => daysUntil(a.expiry) - daysUntil(b.expiry)),
     [meds]
   );
+  // Fenêtre élargie (90 jours) utilisée sur la page Alertes, pour
+  // anticiper les commandes de réapprovisionnement à l'avance.
+  const expiringSoon90 = useMemo(
+    () => meds.filter((m) => daysUntil(m.expiry) <= 90).sort((a, b) => daysUntil(a.expiry) - daysUntil(b.expiry)),
+    [meds]
+  );
+  // Nombre total de références qui nécessitent une action (rupture,
+  // stock bas, ou péremption proche) — affiché en pastille dans le menu.
+  const alertCount = useMemo(() => {
+    const ids = new Set();
+    lowStock.forEach((m) => ids.add(m.id));
+    expiringSoon.forEach((m) => ids.add(m.id));
+    return ids.size;
+  }, [lowStock, expiringSoon]);
 
   const todaySales = useMemo(() => {
     const t = todayISO();
@@ -283,6 +305,13 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   }, [sales]);
   const todayRevenue = useMemo(() => todaySales.reduce((sum, s) => sum + s.total, 0), [todaySales]);
   const stockValue = useMemo(() => meds.reduce((sum, m) => sum + m.quantity * m.price, 0), [meds]);
+
+  // Jours restants avant expiration de l'essai ou de l'abonnement payé.
+  // Tant que l'abonnement n'a pas encore été chargé (première seconde),
+  // on considère l'accès autorisé pour ne pas bloquer l'affichage.
+  const joursRestants = abonnement ? daysUntil(abonnement.dateFin) : null;
+  const accesBloque = abonnement != null && joursRestants < 0;
+  const essaiBientotFini = abonnement && abonnement.statut === "essai" && joursRestants >= 0 && joursRestants <= 3;
 
   if (loading) {
     return (
@@ -295,12 +324,28 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
 
   const NAV = [
     { id: "dashboard", label: "Tableau de bord", icon: LayoutGrid },
+    { id: "alertes", label: "Alertes", icon: AlertTriangle },
     { id: "stock", label: "Stock", icon: Package },
     { id: "ventes", label: "Ventes", icon: ShoppingCart },
     { id: "clients", label: "Clients", icon: Users },
     ...(role === "gerant" ? [{ id: "rapports", label: "Rapports", icon: BarChart3 }] : []),
     ...(role === "gerant" ? [{ id: "equipe", label: "Équipe", icon: UserPlus }] : []),
+    ...(role === "gerant" ? [{ id: "abonnement", label: "Abonnement", icon: CreditCard }] : []),
   ];
+
+  // Accès bloqué : un caissier voit un message et doit attendre que le
+  // gérant règle l'abonnement. Le gérant, lui, garde accès à l'onglet
+  // Abonnement pour pouvoir payer et débloquer le reste de l'appli.
+  if (accesBloque && role !== "gerant") {
+    return (
+      <div className="app-shell loading-shell">
+        <Style />
+        <div className="loader">
+          L'abonnement de la pharmacie a expiré. Contactez votre gérant pour le renouveler.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -314,21 +359,26 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           </div>
         </div>
         <nav className="nav">
-          {NAV.map((n) => (
-            <button
-              key={n.id}
-              className={`nav-item ${tab === n.id ? "nav-active" : ""}`}
-              onClick={() => setTab(n.id)}
-            >
-              <n.icon size={17} />
-              <span>{n.label}</span>
-              {n.id === "stock" && lowStock.length > 0 && (
-                <span className={`nav-pill ${outOfStock.length > 0 ? "nav-pill-critical" : ""}`}>
-                  {lowStock.length}
-                </span>
-              )}
-            </button>
-          ))}
+          {NAV.map((n) => {
+            const verrouille = accesBloque && n.id !== "abonnement";
+            return (
+              <button
+                key={n.id}
+                className={`nav-item ${(accesBloque ? n.id === "abonnement" : tab === n.id) ? "nav-active" : ""}`}
+                onClick={() => !verrouille && setTab(n.id)}
+                disabled={verrouille}
+                style={verrouille ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
+              >
+                {verrouille ? <Lock size={17} /> : <n.icon size={17} />}
+                <span>{n.label}</span>
+                {n.id === "alertes" && !accesBloque && alertCount > 0 && (
+                  <span className={`nav-pill ${outOfStock.length > 0 ? "nav-pill-critical" : ""}`}>
+                    {alertCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
         <div className="sidebar-foot">
           <div className="foot-line">{pharmacieEmail}</div>
@@ -338,12 +388,28 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       </aside>
 
       <main className="main">
+        {essaiBientotFini && !accesBloque && (
+          <div className="abo-banner">
+            <Clock size={15} />
+            Il reste {joursRestants} jour(s) d'essai gratuit.
+            <button className="link-btn" onClick={() => setTab("abonnement")}>S'abonner <ChevronRight size={14} /></button>
+          </div>
+        )}
+        {accesBloque ? (
+          <Abonnement pharmacieId={pharmacieId} abonnement={abonnement} joursRestants={joursRestants} notify={notify} bloque />
+        ) : (
+          <>
         {tab === "dashboard" && (
           <Dashboard
             meds={meds} sales={sales} clients={clients}
             lowStock={lowStock} outOfStock={outOfStock} expiringSoon={expiringSoon}
             todayRevenue={todayRevenue} todaySales={todaySales}
             stockValue={stockValue} setTab={setTab}
+          />
+        )}
+        {tab === "alertes" && (
+          <Alertes
+            outOfStock={outOfStock} lowStock={lowStock} expiringSoon90={expiringSoon90}
           />
         )}
         {tab === "stock" && (
@@ -364,6 +430,11 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         {tab === "equipe" && role === "gerant" && (
           <Equipe pharmacieId={pharmacieId} notify={notify} />
         )}
+        {tab === "abonnement" && role === "gerant" && (
+          <Abonnement pharmacieId={pharmacieId} abonnement={abonnement} joursRestants={joursRestants} notify={notify} />
+        )}
+        </>
+        )}
       </main>
 
       {toast && (
@@ -372,6 +443,253 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           {toast.msg}
         </div>
       )}
+    </div>
+  );
+}
+
+// ================= ALERTES =================
+// Vue consolidée de tout ce qui demande une action : ruptures, stock
+// bas, et péremptions à venir (fenêtre élargie à 90 jours pour anticiper
+// les commandes). Chaque section peut être exportée en Excel séparément.
+function Alertes({ outOfStock, lowStock, expiringSoon90 }) {
+  const lowStockOnly = lowStock.filter((m) => m.quantity > 0); // hors ruptures, déjà listées à part
+  const expired = expiringSoon90.filter((m) => daysUntil(m.expiry) < 0);
+  const expiringNotExpired = expiringSoon90.filter((m) => daysUntil(m.expiry) >= 0);
+
+  function exportSection(rows, name, filename) {
+    exportToExcel([{ name, rows }], filename);
+  }
+
+  const ruptureRows = outOfStock.map((m) => ({
+    "Médicament": m.name, "Catégorie": m.category, "Unité": m.unit,
+    "Fournisseur": m.supplier || "", "Seuil d'alerte": m.minStock,
+  }));
+  const lowStockRows = lowStockOnly.map((m) => ({
+    "Médicament": m.name, "Quantité": m.quantity, "Seuil d'alerte": m.minStock,
+    "Fournisseur": m.supplier || "",
+  }));
+  const expiryRows = expiringSoon90.map((m) => ({
+    "Médicament": m.name, "Quantité": m.quantity, "Péremption": m.expiry,
+    "Statut": expiryStatus(m.expiry).label,
+  }));
+
+  const totalAlerts = outOfStock.length + lowStockOnly.length + expiringSoon90.length;
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Alertes"
+        sub={totalAlerts === 0 ? "Aucune alerte active" : `${totalAlerts} alerte(s) à traiter`}
+        action={
+          totalAlerts > 0 && (
+            <button
+              className="btn-ghost"
+              onClick={() => exportSection(
+                [...ruptureRows, ...lowStockRows, ...expiryRows.map(r => ({ "Médicament": r["Médicament"], "Quantité": r["Quantité"], "Péremption": r["Péremption"], "Statut": r["Statut"] }))],
+                "Alertes",
+                `alertes-${todayISO()}.xlsx`
+              )}
+            >
+              <Download size={16} /> Tout exporter
+            </button>
+          )
+        }
+      />
+
+      {totalAlerts === 0 ? (
+        <div className="panel">
+          <EmptyRow text="Rien à signaler : stock suffisant partout et aucune péremption proche." />
+        </div>
+      ) : (
+        <>
+          {outOfStock.length > 0 && (
+            <div className="panel panel-alert">
+              <div className="panel-head">
+                <h3><XCircle size={16} /> Ruptures de stock ({outOfStock.length})</h3>
+                <button className="btn-ghost" onClick={() => exportSection(ruptureRows, "Ruptures", `ruptures-${todayISO()}.xlsx`)}>
+                  <Download size={14} /> Exporter
+                </button>
+              </div>
+              <ul className="mini-list">
+                {outOfStock.map((m) => (
+                  <li key={m.id}>
+                    <span className="mini-name">{m.name}</span>
+                    <span className="mini-meta">{m.supplier || "Fournisseur non renseigné"}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {lowStockOnly.length > 0 && (
+            <div className="panel">
+              <div className="panel-head">
+                <h3><AlertTriangle size={16} /> Stock bas ({lowStockOnly.length})</h3>
+                <button className="btn-ghost" onClick={() => exportSection(lowStockRows, "Stock bas", `stock-bas-${todayISO()}.xlsx`)}>
+                  <Download size={14} /> Exporter
+                </button>
+              </div>
+              <ul className="mini-list">
+                {lowStockOnly.map((m) => (
+                  <li key={m.id}>
+                    <span className="mini-name">{m.name}</span>
+                    <span className="mini-meta">{m.quantity} / {m.minStock} {m.unit}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {expired.length > 0 && (
+            <div className="panel panel-alert">
+              <div className="panel-head">
+                <h3><Clock size={16} /> Déjà expirés — à retirer du stock ({expired.length})</h3>
+              </div>
+              <ul className="mini-list">
+                {expired.map((m) => (
+                  <li key={m.id}>
+                    <span className="mini-name">{m.name}</span>
+                    <Badge tone="danger">{expiryStatus(m.expiry).label}</Badge>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {expiringNotExpired.length > 0 && (
+            <div className="panel">
+              <div className="panel-head">
+                <h3><Clock size={16} /> Péremptions à venir (90 jours) ({expiringNotExpired.length})</h3>
+                <button className="btn-ghost" onClick={() => exportSection(expiryRows, "Péremptions", `peremptions-${todayISO()}.xlsx`)}>
+                  <Download size={14} /> Exporter
+                </button>
+              </div>
+              <ul className="mini-list">
+                {expiringNotExpired.map((m) => {
+                  const st = expiryStatus(m.expiry);
+                  return (
+                    <li key={m.id}>
+                      <span className="mini-name">{m.name}</span>
+                      <Badge tone={st.tone}>{st.label}</Badge>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ================= ABONNEMENT =================
+const PLANS = [
+  {
+    id: "basique", nom: "Basique", prix: 15000, prixUSD: 25,
+    desc: "Idéal pour une petite officine avec un seul point de vente.",
+    atouts: ["Stock, ventes et clients illimités", "Alertes péremption & stock bas", "Export Excel"],
+  },
+  {
+    id: "pro", nom: "Pro", prix: 25000, prixUSD: 40,
+    desc: "Pour les officines avec plusieurs employés et un suivi poussé.",
+    atouts: ["Tout le plan Basique", "Gestion d'équipe illimitée", "Rapports détaillés"],
+  },
+];
+
+function Abonnement({ pharmacieId, abonnement, joursRestants, notify, bloque }) {
+  const [chargementPlan, setChargementPlan] = useState(null);
+  // "mobile" = Mobile Money via CinetPay (Afrique de l'Ouest)
+  // "carte" = carte bancaire internationale via Stripe (reste du monde)
+  const [methode, setMethode] = useState("mobile");
+
+  async function payer(planId) {
+    setChargementPlan(planId);
+    try {
+      const paymentUrl = methode === "carte"
+        ? await creerLienPaiementStripe(pharmacieId, planId)
+        : await creerLienPaiement(pharmacieId, planId);
+      window.location.href = paymentUrl;
+    } catch (e) {
+      notify(e.message || "Impossible de démarrer le paiement pour le moment.", "danger");
+      setChargementPlan(null);
+    }
+  }
+
+  const statutLabel = abonnement?.statut === "actif"
+    ? "Abonnement actif"
+    : abonnement?.statut === "essai"
+      ? "Période d'essai gratuite"
+      : "Abonnement expiré";
+  const statutTone = abonnement?.statut === "actif" ? "ok" : (joursRestants >= 0 ? "warn" : "danger");
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Abonnement"
+        sub={bloque ? "Votre accès est suspendu — choisissez un plan pour le réactiver." : "Gérez le plan et le paiement de votre officine."}
+      />
+
+      <div className="panel">
+        <div className="panel-head">
+          <h3><CreditCard size={16} /> Statut actuel</h3>
+          <Badge tone={statutTone}>{statutLabel}</Badge>
+        </div>
+        <p className="confirm-text" style={{ padding: 0 }}>
+          {joursRestants >= 0
+            ? `${joursRestants} jour(s) restant(s)${abonnement?.plan && abonnement.plan !== "essai" ? ` sur le plan ${abonnement.plan}` : ""}.`
+            : "Votre accès est suspendu depuis l'expiration de votre période ou de votre abonnement."}
+        </p>
+      </div>
+
+      <div className="method-toggle">
+        <button
+          className={`method-btn ${methode === "mobile" ? "method-active" : ""}`}
+          onClick={() => setMethode("mobile")}
+        >
+          <Smartphone size={15} /> Mobile Money (Afrique de l'Ouest)
+        </button>
+        <button
+          className={`method-btn ${methode === "carte" ? "method-active" : ""}`}
+          onClick={() => setMethode("carte")}
+        >
+          <Globe size={15} /> Carte bancaire internationale
+        </button>
+      </div>
+
+      <div className="plans-grid">
+        {PLANS.map((p) => (
+          <div key={p.id} className="plan-card">
+            <div className="plan-name">{p.nom}</div>
+            <div className="plan-price">
+              {methode === "carte" ? `$${p.prixUSD}` : fmtFCFA(p.prix)}
+              <span>/mois</span>
+            </div>
+            <p className="td-sub">{p.desc}</p>
+            <ul className="plan-features">
+              {p.atouts.map((a) => (
+                <li key={a}><CheckCircle2 size={14} /> {a}</li>
+              ))}
+            </ul>
+            <button
+              className="btn-primary btn-full"
+              disabled={chargementPlan !== null}
+              onClick={() => payer(p.id)}
+            >
+              {methode === "carte" ? <CreditCard size={16} /> : <Smartphone size={16} />}
+              {chargementPlan === p.id
+                ? "Redirection…"
+                : methode === "carte" ? "Payer par carte" : "Payer par Mobile Money"}
+            </button>
+          </div>
+        ))}
+      </div>
+      <p className="td-sub">
+        {methode === "carte"
+          ? "Paiement sécurisé par carte bancaire (Visa, Mastercard…) via Stripe, accepté dans la quasi-totalité des pays."
+          : "Paiement sécurisé via Orange Money, MTN Money, Moov Money ou Wave."}
+        {" "}Vous serez redirigé vers la page de paiement, puis ramené automatiquement ici une fois le paiement confirmé.
+      </p>
     </div>
   );
 }
@@ -408,7 +726,7 @@ function Dashboard({ meds, lowStock, outOfStock, expiringSoon, todayRevenue, tod
               <button className="btn-ghost" onClick={handleExportRuptures}>
                 <Download size={16} /> Exporter la liste
               </button>
-              <button className="link-btn" onClick={() => setTab("stock")}>Voir le stock <ChevronRight size={14} /></button>
+              <button className="link-btn" onClick={() => setTab("alertes")}>Voir les alertes <ChevronRight size={14} /></button>
             </div>
           </div>
           <ul className="mini-list">
@@ -426,7 +744,7 @@ function Dashboard({ meds, lowStock, outOfStock, expiringSoon, todayRevenue, tod
         <div className="panel">
           <div className="panel-head">
             <h3><AlertTriangle size={16} /> Stock à réapprovisionner</h3>
-            <button className="link-btn" onClick={() => setTab("stock")}>Voir le stock <ChevronRight size={14} /></button>
+            <button className="link-btn" onClick={() => setTab("alertes")}>Voir les alertes <ChevronRight size={14} /></button>
           </div>
           {lowStock.length === 0 ? (
             <EmptyRow text="Tous les stocks sont au-dessus du seuil minimum." />
@@ -445,7 +763,7 @@ function Dashboard({ meds, lowStock, outOfStock, expiringSoon, todayRevenue, tod
         <div className="panel">
           <div className="panel-head">
             <h3><Clock size={16} /> Péremptions à surveiller</h3>
-            <button className="link-btn" onClick={() => setTab("stock")}>Voir le stock <ChevronRight size={14} /></button>
+            <button className="link-btn" onClick={() => setTab("alertes")}>Voir les alertes <ChevronRight size={14} /></button>
           </div>
           {expiringSoon.length === 0 ? (
             <EmptyRow text="Aucun médicament n'expire dans les 30 prochains jours." />
@@ -1609,6 +1927,31 @@ function Style() {
       }
       .toast-danger { background: var(--rose); }
 
+      .abo-banner {
+        display: flex; align-items: center; gap: 8px; font-size: 12.5px;
+        background: var(--amber-soft); color: var(--amber); border: 1px solid var(--amber);
+        padding: 8px 14px; border-radius: 8px; margin-bottom: -6px;
+      }
+      .abo-banner .link-btn { margin-left: auto; color: var(--amber); }
+
+      .method-toggle { display: flex; gap: 8px; }
+      .method-btn {
+        display: flex; align-items: center; gap: 7px; flex: 1;
+        border: 1px solid var(--line); background: var(--panel); color: var(--ink-soft);
+        padding: 10px 14px; border-radius: 9px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+        justify-content: center;
+      }
+      .method-active { border-color: var(--teal); background: var(--sage); color: var(--teal-deep); }
+
+      .plans-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+      .plan-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 8px; }
+      .plan-name { font-family: Georgia, serif; font-size: 16px; font-weight: 700; color: var(--teal-deep); }
+      .plan-price { font-size: 24px; font-weight: 700; font-family: Georgia, serif; color: var(--teal); }
+      .plan-price span { font-size: 12px; color: var(--ink-soft); font-weight: 400; font-family: inherit; }
+      .plan-features { list-style: none; margin: 6px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--ink); }
+      .plan-features li { display: flex; align-items: center; gap: 7px; }
+      .plan-features li svg { color: var(--ok); flex-shrink: 0; }
+
       @media (max-width: 760px) {
         .app-shell { flex-direction: column; }
         .sidebar { width: 100%; flex-direction: row; align-items: center; padding: 12px; }
@@ -1616,7 +1959,7 @@ function Style() {
         .nav-item span { display: none; }
         .sidebar-foot { display: none; }
         .brand-sub { display: none; }
-        .stat-grid, .two-col, .pos-grid, .form-grid { grid-template-columns: 1fr; }
+        .stat-grid, .two-col, .pos-grid, .form-grid, .plans-grid { grid-template-columns: 1fr; }
       }
 
       .receipt-modal { width: 340px; }
