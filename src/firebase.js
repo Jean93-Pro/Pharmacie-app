@@ -25,6 +25,7 @@ import {
   onAuthStateChanged,
   sendPasswordResetEmail,
 } from "firebase/auth";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCesyXpdobQgy-M_XHJ2w_xa53rEdhgEUU",
@@ -38,6 +39,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const functions = getFunctions(app);
 
 // ---------------------------------------------------------------
 // AUTHENTIFICATION (inchangé)
@@ -308,4 +310,46 @@ export async function updateClient(pharmacieId, clientId, data) {
 export async function deleteClient(pharmacieId, clientId) {
   const ref = doc(db, "pharmacies", pharmacieId, "clients", clientId);
   await deleteDoc(ref);
+}
+
+// ---------------------------------------------------------------
+// ABONNEMENT & PAIEMENT
+// pharmacies/{pharmacieId}/meta/abonnement : { plan, statut, dateFin }
+// - Le document est créé côté client UNE SEULE FOIS, avec un essai
+//   gratuit de 14 jours (voir demarrerEssaiGratuit). Toute mise à jour
+//   ultérieure (passage en "actif" après paiement) passe OBLIGATOIREMENT
+//   par la Cloud Function cinetpayNotify, qui utilise les droits admin —
+//   les règles Firestore interdisent au client d'écrire statut:"actif"
+//   lui-même. Voir firestore.rules et functions/index.js.
+// ---------------------------------------------------------------
+export function subscribeAbonnement(pharmacieId, callback) {
+  const ref = doc(db, "pharmacies", pharmacieId, "meta", "abonnement");
+  return onSnapshot(ref, (snap) => {
+    callback(snap.exists() ? snap.data() : null);
+  });
+}
+
+// Ne crée le document que s'il n'existe pas encore — ne touche jamais à
+// un abonnement déjà en place (essai en cours, ou plan payé actif).
+export async function demarrerEssaiGratuit(pharmacieId) {
+  const ref = doc(db, "pharmacies", pharmacieId, "meta", "abonnement");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    const dateFin = new Date();
+    dateFin.setDate(dateFin.getDate() + 14);
+    await setDoc(ref, {
+      plan: "essai",
+      statut: "essai",
+      dateFin: dateFin.toISOString().slice(0, 10),
+    });
+  }
+}
+
+// Demande à la Cloud Function de créer une session de paiement CinetPay
+// (Orange Money, MTN Money, Moov Money, Wave) et renvoie l'URL vers
+// laquelle rediriger l'utilisateur.
+export async function creerLienPaiement(pharmacieId, plan) {
+  const appelable = httpsCallable(functions, "creerPaiement");
+  const res = await appelable({ pharmacieId, plan });
+  return res.data.paymentUrl;
 }
