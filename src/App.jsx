@@ -271,6 +271,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   }, []);
 
   const lowStock = useMemo(() => meds.filter((m) => m.quantity <= m.minStock), [meds]);
+  const outOfStock = useMemo(() => meds.filter((m) => m.quantity === 0), [meds]);
   const expiringSoon = useMemo(
     () => meds.filter((m) => daysUntil(m.expiry) <= 30).sort((a, b) => daysUntil(a.expiry) - daysUntil(b.expiry)),
     [meds]
@@ -322,7 +323,9 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
               <n.icon size={17} />
               <span>{n.label}</span>
               {n.id === "stock" && lowStock.length > 0 && (
-                <span className="nav-pill">{lowStock.length}</span>
+                <span className={`nav-pill ${outOfStock.length > 0 ? "nav-pill-critical" : ""}`}>
+                  {lowStock.length}
+                </span>
               )}
             </button>
           ))}
@@ -338,13 +341,13 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         {tab === "dashboard" && (
           <Dashboard
             meds={meds} sales={sales} clients={clients}
-            lowStock={lowStock} expiringSoon={expiringSoon}
+            lowStock={lowStock} outOfStock={outOfStock} expiringSoon={expiringSoon}
             todayRevenue={todayRevenue} todaySales={todaySales}
             stockValue={stockValue} setTab={setTab}
           />
         )}
         {tab === "stock" && (
-          <Stock meds={meds} pharmacieId={pharmacieId} notify={notify} lowStock={lowStock} />
+          <Stock meds={meds} pharmacieId={pharmacieId} notify={notify} lowStock={lowStock} outOfStock={outOfStock} />
         )}
         {tab === "ventes" && (
           <Ventes
@@ -374,7 +377,18 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
 }
 
 // ================= DASHBOARD =================
-function Dashboard({ meds, lowStock, expiringSoon, todayRevenue, todaySales, stockValue, setTab }) {
+function Dashboard({ meds, lowStock, outOfStock, expiringSoon, todayRevenue, todaySales, stockValue, setTab }) {
+  function handleExportRuptures() {
+    const rows = outOfStock.map((m) => ({
+      "Médicament": m.name,
+      "Catégorie": m.category,
+      "Unité": m.unit,
+      "Fournisseur": m.supplier || "",
+      "Seuil d'alerte": m.minStock,
+    }));
+    exportToExcel([{ name: "Ruptures", rows }], `ruptures-${todayISO()}.xlsx`);
+  }
+
   return (
     <div className="page">
       <PageHead title="Tableau de bord" sub="Vue d'ensemble de l'officine" />
@@ -382,9 +396,31 @@ function Dashboard({ meds, lowStock, expiringSoon, todayRevenue, todaySales, sto
       <div className="stat-grid">
         <StatCard icon={TrendingUp} label="Ventes du jour" value={fmtFCFA(todayRevenue)} sub={`${todaySales.length} transaction(s)`} tone="teal" />
         <StatCard icon={Package} label="Valeur du stock" value={fmtFCFA(stockValue)} sub={`${meds.length} références`} tone="ink" />
+        <StatCard icon={XCircle} label="Ruptures de stock" value={outOfStock.length} sub="références à 0" tone={outOfStock.length ? "rose" : "ok"} />
         <StatCard icon={AlertTriangle} label="Stock bas" value={lowStock.length} sub="références sous le seuil" tone={lowStock.length ? "amber" : "ok"} />
-        <StatCard icon={Clock} label="Péremption proche" value={expiringSoon.length} sub="≤ 30 jours" tone={expiringSoon.length ? "rose" : "ok"} />
       </div>
+
+      {outOfStock.length > 0 && (
+        <div className="panel panel-alert">
+          <div className="panel-head">
+            <h3><XCircle size={16} /> Ruptures de stock — à commander en urgence</h3>
+            <div className="page-actions">
+              <button className="btn-ghost" onClick={handleExportRuptures}>
+                <Download size={16} /> Exporter la liste
+              </button>
+              <button className="link-btn" onClick={() => setTab("stock")}>Voir le stock <ChevronRight size={14} /></button>
+            </div>
+          </div>
+          <ul className="mini-list">
+            {outOfStock.map((m) => (
+              <li key={m.id}>
+                <span className="mini-name">{m.name}</span>
+                <span className="mini-meta">{m.supplier || "Fournisseur non renseigné"}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="two-col">
         <div className="panel">
@@ -449,7 +485,7 @@ function PageHead({ title, sub, action }) {
 }
 
 // ================= STOCK =================
-function Stock({ meds, pharmacieId, notify, lowStock }) {
+function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Tous");
   const [modal, setModal] = useState(null); // { mode: 'new'|'edit', data }
@@ -461,6 +497,26 @@ function Stock({ meds, pharmacieId, notify, lowStock }) {
       .filter((m) => m.name.toLowerCase().includes(query.toLowerCase()))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [meds, query, filter]);
+
+  // Signale une rupture de stock en un clic — utile quand le caissier
+  // constate au rayon qu'un produit est épuisé, sans attendre que le
+  // système le détecte via une vente (démarque, casse, produit égaré…).
+  async function handleSignalerRupture(med) {
+    if (med.quantity === 0) return;
+    await updateMed(pharmacieId, med.id, { quantity: 0 });
+    notify(`Rupture signalée : ${med.name}`, "danger");
+  }
+
+  function handleExportRuptures() {
+    const rows = outOfStock.map((m) => ({
+      "Médicament": m.name,
+      "Catégorie": m.category,
+      "Unité": m.unit,
+      "Fournisseur": m.supplier || "",
+      "Seuil d'alerte": m.minStock,
+    }));
+    exportToExcel([{ name: "Ruptures", rows }], `ruptures-${todayISO()}.xlsx`);
+  }
 
   async function handleSave(data) {
     const { id, ...rest } = data;
@@ -537,9 +593,14 @@ function Stock({ meds, pharmacieId, notify, lowStock }) {
     <div className="page">
       <PageHead
         title="Stock"
-        sub={`${meds.length} références · ${lowStock.length} sous le seuil minimum`}
+        sub={`${meds.length} références · ${lowStock.length} sous le seuil minimum · ${outOfStock.length} en rupture`}
         action={
           <div className="page-actions">
+            {outOfStock.length > 0 && (
+              <button className="btn-ghost btn-alert" onClick={handleExportRuptures}>
+                <XCircle size={16} /> Exporter les ruptures
+              </button>
+            )}
             <button className="btn-ghost" onClick={handleExport}>
               <Download size={16} /> Exporter
             </button>
@@ -584,19 +645,36 @@ function Stock({ meds, pharmacieId, notify, lowStock }) {
             )}
             {filtered.map((m) => {
               const st = expiryStatus(m.expiry);
-              const low = m.quantity <= m.minStock;
+              const rupture = m.quantity === 0;
+              const low = !rupture && m.quantity <= m.minStock;
               return (
                 <tr key={m.id}>
                   <td className="td-strong">{m.name}<div className="td-sub">{m.unit}</div></td>
                   <td>{m.category}</td>
                   <td>
-                    <span className={low ? "qty-low" : ""}>{m.quantity}</span>
-                    {low && <div className="td-sub">seuil {m.minStock}</div>}
+                    {rupture ? (
+                      <Badge tone="danger">Rupture</Badge>
+                    ) : (
+                      <>
+                        <span className={low ? "qty-low" : ""}>{m.quantity}</span>
+                        {low && <div className="td-sub">seuil {m.minStock}</div>}
+                      </>
+                    )}
                   </td>
                   <td>{fmtFCFA(m.price)}</td>
                   <td><Badge tone={st.tone}>{st.label}</Badge></td>
                   <td>{m.supplier || "—"}</td>
                   <td className="td-actions">
+                    {!rupture && (
+                      <button
+                        className="icon-btn icon-danger"
+                        onClick={() => handleSignalerRupture(m)}
+                        aria-label="Signaler une rupture"
+                        title="Signaler une rupture de stock"
+                      >
+                        <XCircle size={15} />
+                      </button>
+                    )}
                     <button className="icon-btn" onClick={() => setModal({ mode: "edit", data: m })} aria-label="Modifier"><Pencil size={15} /></button>
                     <button className="icon-btn icon-danger" onClick={() => setConfirmDelete(m)} aria-label="Supprimer"><Trash2 size={15} /></button>
                   </td>
@@ -756,9 +834,22 @@ function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
       total,
     };
     const items = cart.map((i) => ({ medId: i.medId, name: i.name, price: i.price, qty: i.qty }));
+    // Articles dont la vente vide complètement le stock (qty vendue ==
+    // stock disponible avant la vente) : rupture immédiate à signaler.
+    const depleted = cart.filter((i) => i.qty === i.maxQty).map((i) => i.name);
     try {
       const saleId = await finaliserVente(pharmacieId, cart, saleMeta);
       notify(`Vente enregistrée · ${fmtFCFA(total)}`);
+      if (depleted.length > 0) {
+        setTimeout(() => {
+          notify(
+            depleted.length === 1
+              ? `Rupture de stock : ${depleted[0]}`
+              : `Rupture de stock : ${depleted.join(", ")}`,
+            "danger"
+          );
+        }, 2800);
+      }
       setReceiptSale({ id: saleId, ...saleMeta, items });
       setCart([]);
       setClientName("");
@@ -1375,6 +1466,7 @@ function Style() {
         font-size: 10.5px; font-weight: 700; border-radius: 10px;
         padding: 1px 6px;
       }
+      .nav-pill-critical { box-shadow: 0 0 0 2px rgba(165,67,58,0.35); }
       .sidebar-foot { border-top: 1px solid rgba(255,255,255,0.12); padding-top: 12px; margin-top: 8px; }
       .foot-line { font-size: 11px; color: #cfd9d1; word-break: break-all; }
       .foot-dim { opacity: 0.6; margin-top: 2px; }
@@ -1413,6 +1505,8 @@ function Style() {
 
       .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
       .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+      .panel-alert { border-color: var(--rose); background: var(--rose-soft); }
+      .panel-alert .panel-head h3 { color: var(--rose); }
       .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
       .panel-head h3 { display: flex; align-items: center; gap: 7px; font-size: 13.5px; margin: 0; color: var(--teal-deep); }
       .link-btn { display: flex; align-items: center; gap: 2px; border: none; background: none; color: var(--teal); font-size: 12px; cursor: pointer; font-weight: 600; }
@@ -1455,6 +1549,8 @@ function Style() {
       .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
       .btn-ghost { display: flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--line); color: var(--ink); padding: 9px 15px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
       .btn-ghost:hover { background: var(--sage); }
+      .btn-alert { border-color: var(--rose); color: var(--rose); }
+      .btn-alert:hover { background: var(--rose-soft); }
       .btn-danger { background: var(--rose); color: white; border: none; padding: 9px 15px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
       .btn-full { width: 100%; justify-content: center; margin-top: 10px; }
 
