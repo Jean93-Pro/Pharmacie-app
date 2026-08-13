@@ -1,12 +1,136 @@
-<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Officine — Gestion de pharmacie</title>
-  </head>
-  <body style="margin:0;">
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
+// Cloud Functions pour l'abonnement/paiement de l'appli Officine.
+//
+// Deux fonctions :
+// - creerPaiement (callable) : le client l'appelle pour obtenir une URL
+//   de paiement CinetPay (Orange Money, MTN Money, Moov Money, Wave).
+// - cinetpayNotify (HTTP) : CinetPay appelle cette URL après un paiement.
+//   On revérifie TOUJOURS le paiement directement auprès de CinetPay
+//   avant de créditer quoi que ce soit — on ne fait jamais confiance
+//   aux données brutes envoyées par le webhook.
+//
+// Installation :
+//   cd functions && npm install firebase-admin firebase-functions
+//   firebase functions:secrets:set CINETPAY_APIKEY
+//   firebase functions:secrets:set CINETPAY_SITE_ID
+//   firebase deploy --only functions,firestore:rules
+//
+// Compte marchand nécessaire : https://cinetpay.com (Côte d'Ivoire,
+// gère Orange Money, MTN Money, Moov Money et Wave).
+// Remplacez PROJECT_ID et VOTRE-DOMAINE ci-dessous par les vraies valeurs
+// une fois le projet et le nom de domaine de l'appli connus.
+
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
+const admin = require("firebase-admin");
+
+admin.initializeApp();
+const db = admin.firestore();
+
+const CINETPAY_APIKEY = defineSecret("CINETPAY_APIKEY");
+const CINETPAY_SITE_ID = defineSecret("CINETPAY_SITE_ID");
+
+const PLANS = {
+  basique: { montant: 15000, label: "Plan Basique" },
+  pro: { montant: 25000, label: "Plan Pro" },
+};
+
+const NOTIFY_URL = "https://us-central1-PROJECT_ID.cloudfunctions.net/cinetpayNotify";
+const RETURN_URL = "https://VOTRE-DOMAINE/abonnement";
+
+exports.creerPaiement = onCall(
+  { secrets: [CINETPAY_APIKEY, CINETPAY_SITE_ID], region: "us-central1" },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Non authentifié.");
+    }
+    const { pharmacieId, plan } = request.data || {};
+    if (!PLANS[plan]) {
+      throw new HttpsError("invalid-argument", "Plan inconnu.");
+    }
+
+    // On vérifie que l'appelant appartient bien à la pharmacie pour
+    // laquelle il demande un paiement — jamais celle d'un autre.
+    const accesSnap = await db.doc(`acces/${request.auth.uid}`).get();
+    if (!accesSnap.exists || accesSnap.data().pharmacieId !== pharmacieId) {
+      throw new HttpsError("permission-denied", "Accès refusé à cette pharmacie.");
+    }
+
+    const transactionId = `${pharmacieId}-${Date.now()}`;
+    const { montant, label } = PLANS[plan];
+
+    const resp = await fetch("https://api-checkout.cinetpay.com/v2/payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apikey: CINETPAY_APIKEY.value(),
+        site_id: CINETPAY_SITE_ID.value(),
+        transaction_id: transactionId,
+        amount: montant,
+        currency: "XOF",
+        description: `Abonnement Officine — ${label}`,
+        notify_url: NOTIFY_URL,
+        return_url: RETURN_URL,
+        channels: "ALL",
+        metadata: JSON.stringify({ pharmacieId, plan }),
+      }),
+    });
+    const data = await resp.json();
+
+    if (data.code !== "201") {
+      throw new HttpsError("internal", data.message || "Erreur lors de la création du paiement.");
+    }
+
+    return { paymentUrl: data.data.payment_url, transactionId };
+  }
+);
+
+exports.cinetpayNotify = onRequest(
+  { secrets: [CINETPAY_APIKEY, CINETPAY_SITE_ID], region: "us-central1" },
+  async (req, res) => {
+    const transactionId = req.body?.cpm_trans_id || req.query?.cpm_trans_id;
+    if (!transactionId) {
+      res.status(400).send("transaction_id manquant");
+      return;
+    }
+
+    try {
+      // Revérification directe auprès de CinetPay — étape obligatoire,
+      // on ne se fie jamais au contenu brut du webhook.
+      const verifResp = await fetch("https://api-checkout.cinetpay.com/v2/payment/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apikey: CINETPAY_APIKEY.value(),
+          site_id: CINETPAY_SITE_ID.value(),
+          transaction_id: transactionId,
+        }),
+      });
+      const verif = await verifResp.json();
+
+      if (verif.code === "00" && verif.data && verif.data.status === "ACCEPTED") {
+        const metadata = JSON.parse(verif.data.metadata || "{}");
+        const { pharmacieId, plan } = metadata;
+        if (pharmacieId && PLANS[plan]) {
+          const dateFin = new Date();
+          dateFin.setDate(dateFin.getDate() + 30); // 30 jours par cycle payé
+          await db.doc(`pharmacies/${pharmacieId}/meta/abonnement`).set(
+            {
+              plan,
+              statut: "actif",
+              dateFin: dateFin.toISOString().slice(0, 10),
+              derniereTransaction: transactionId,
+            },
+            { merge: true }
+          );
+        }
+      }
+      res.status(200).send("OK");
+    } catch (err) {
+      console.error("cinetpayNotify error:", err);
+      // On répond 200 quand même : CinetPay réessaiera sinon indéfiniment
+      // pour une erreur qui ne se résoudra pas toute seule. L'erreur est
+      // loggée pour investigation manuelle.
+      res.status(200).send("Erreur interne, voir logs.");
+    }
+  }
+);
