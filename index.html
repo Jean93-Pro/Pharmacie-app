@@ -1,37 +1,44 @@
 // Cloud Functions pour l'abonnement/paiement de l'appli Officine.
 //
-// Deux fonctions :
-// - creerPaiement (callable) : le client l'appelle pour obtenir une URL
-//   de paiement CinetPay (Orange Money, MTN Money, Moov Money, Wave).
-// - cinetpayNotify (HTTP) : CinetPay appelle cette URL après un paiement.
-//   On revérifie TOUJOURS le paiement directement auprès de CinetPay
-//   avant de créditer quoi que ce soit — on ne fait jamais confiance
-//   aux données brutes envoyées par le webhook.
+// DEUX moyens de paiement, pour ne pas limiter l'appli à un seul pays :
+// - CinetPay (creerPaiement / cinetpayNotify) : Mobile Money — Orange
+//   Money, MTN Money, Moov Money, Wave — pensé pour l'Afrique de l'Ouest.
+// - Stripe (creerPaiementStripe / stripeNotify) : carte bancaire (Visa,
+//   Mastercard…), accepté dans la quasi-totalité des pays du monde.
 //
 // Installation :
-//   cd functions && npm install firebase-admin firebase-functions
+//   cd functions && npm install firebase-admin firebase-functions stripe
 //   firebase functions:secrets:set CINETPAY_APIKEY
 //   firebase functions:secrets:set CINETPAY_SITE_ID
+//   firebase functions:secrets:set STRIPE_SECRET_KEY
+//   firebase functions:secrets:set STRIPE_WEBHOOK_SECRET
 //   firebase deploy --only functions,firestore:rules
 //
-// Compte marchand nécessaire : https://cinetpay.com (Côte d'Ivoire,
-// gère Orange Money, MTN Money, Moov Money et Wave).
+// Comptes marchands nécessaires :
+//   - CinetPay : https://cinetpay.com (Côte d'Ivoire / Afrique de l'Ouest)
+//   - Stripe   : https://stripe.com (international)
+// Après création du webhook Stripe (Dashboard > Developers > Webhooks,
+// URL = stripeNotify ci-dessous, événement "checkout.session.completed"),
+// copiez le "Signing secret" dans STRIPE_WEBHOOK_SECRET.
 // Remplacez PROJECT_ID et VOTRE-DOMAINE ci-dessous par les vraies valeurs
 // une fois le projet et le nom de domaine de l'appli connus.
 
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
+const Stripe = require("stripe");
 
 admin.initializeApp();
 const db = admin.firestore();
 
 const CINETPAY_APIKEY = defineSecret("CINETPAY_APIKEY");
 const CINETPAY_SITE_ID = defineSecret("CINETPAY_SITE_ID");
+const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
+const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 
 const PLANS = {
-  basique: { montant: 15000, label: "Plan Basique" },
-  pro: { montant: 25000, label: "Plan Pro" },
+  basique: { montant: 15000, montantUSD: 2500, label: "Plan Basique" }, // montantUSD en cents
+  pro: { montant: 25000, montantUSD: 4000, label: "Plan Pro" },
 };
 
 const NOTIFY_URL = "https://us-central1-PROJECT_ID.cloudfunctions.net/cinetpayNotify";
@@ -84,6 +91,23 @@ exports.creerPaiement = onCall(
   }
 );
 
+// Met à jour l'abonnement d'une pharmacie après un paiement confirmé —
+// utilisée par CinetPay ET Stripe, pour ne pas dupliquer la logique.
+async function crediterAbonnement(pharmacieId, plan, transactionId) {
+  if (!pharmacieId || !PLANS[plan]) return;
+  const dateFin = new Date();
+  dateFin.setDate(dateFin.getDate() + 30); // 30 jours par cycle payé
+  await db.doc(`pharmacies/${pharmacieId}/meta/abonnement`).set(
+    {
+      plan,
+      statut: "actif",
+      dateFin: dateFin.toISOString().slice(0, 10),
+      derniereTransaction: transactionId,
+    },
+    { merge: true }
+  );
+}
+
 exports.cinetpayNotify = onRequest(
   { secrets: [CINETPAY_APIKEY, CINETPAY_SITE_ID], region: "us-central1" },
   async (req, res) => {
@@ -109,20 +133,7 @@ exports.cinetpayNotify = onRequest(
 
       if (verif.code === "00" && verif.data && verif.data.status === "ACCEPTED") {
         const metadata = JSON.parse(verif.data.metadata || "{}");
-        const { pharmacieId, plan } = metadata;
-        if (pharmacieId && PLANS[plan]) {
-          const dateFin = new Date();
-          dateFin.setDate(dateFin.getDate() + 30); // 30 jours par cycle payé
-          await db.doc(`pharmacies/${pharmacieId}/meta/abonnement`).set(
-            {
-              plan,
-              statut: "actif",
-              dateFin: dateFin.toISOString().slice(0, 10),
-              derniereTransaction: transactionId,
-            },
-            { merge: true }
-          );
-        }
+        await crediterAbonnement(metadata.pharmacieId, metadata.plan, transactionId);
       }
       res.status(200).send("OK");
     } catch (err) {
@@ -132,5 +143,77 @@ exports.cinetpayNotify = onRequest(
       // loggée pour investigation manuelle.
       res.status(200).send("Erreur interne, voir logs.");
     }
+  }
+);
+
+// ---------------------------------------------------------------
+// STRIPE — carte bancaire internationale.
+// ---------------------------------------------------------------
+exports.creerPaiementStripe = onCall(
+  { secrets: [STRIPE_SECRET_KEY], region: "us-central1" },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Non authentifié.");
+    }
+    const { pharmacieId, plan } = request.data || {};
+    if (!PLANS[plan]) {
+      throw new HttpsError("invalid-argument", "Plan inconnu.");
+    }
+
+    const accesSnap = await db.doc(`acces/${request.auth.uid}`).get();
+    if (!accesSnap.exists || accesSnap.data().pharmacieId !== pharmacieId) {
+      throw new HttpsError("permission-denied", "Accès refusé à cette pharmacie.");
+    }
+
+    const stripe = Stripe(STRIPE_SECRET_KEY.value());
+    const { montantUSD, label } = PLANS[plan];
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: { name: `Abonnement Officine — ${label}` },
+          unit_amount: montantUSD,
+        },
+        quantity: 1,
+      }],
+      metadata: { pharmacieId, plan },
+      success_url: `${RETURN_URL}?paiement=ok`,
+      cancel_url: `${RETURN_URL}?paiement=annule`,
+    });
+
+    return { paymentUrl: session.url };
+  }
+);
+
+// Webhook Stripe — on vérifie la SIGNATURE cryptographique de la requête
+// (jamais son contenu brut) avant de créditer l'abonnement. Nécessite le
+// corps brut de la requête (rawBody), fourni automatiquement par onRequest.
+exports.stripeNotify = onRequest(
+  { secrets: [STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET], region: "us-central1" },
+  async (req, res) => {
+    const stripe = Stripe(STRIPE_SECRET_KEY.value());
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.rawBody,
+        req.headers["stripe-signature"],
+        STRIPE_WEBHOOK_SECRET.value()
+      );
+    } catch (err) {
+      console.error("Signature Stripe invalide:", err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+      return;
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const { pharmacieId, plan } = session.metadata || {};
+      await crediterAbonnement(pharmacieId, plan, session.id);
+    }
+
+    res.status(200).send("OK");
   }
 );
