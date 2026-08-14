@@ -290,14 +290,39 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     () => meds.filter((m) => daysUntil(m.expiry) <= 90).sort((a, b) => daysUntil(a.expiry) - daysUntil(b.expiry)),
     [meds]
   );
+  // Produits en stock qui ne se sont pas vendus depuis longtemps (durée
+  // configurable ci-dessous). Utile pour repérer les articles à écouler
+  // ou à ne plus recommander avant qu'ils périment ou immobilisent
+  // inutilement de la trésorerie.
+  const NO_MOVEMENT_DAYS = 60;
+  const noMovement = useMemo(() => {
+    const lastSaleByMed = {};
+    sales.forEach((s) => {
+      s.items.forEach((i) => {
+        if (!lastSaleByMed[i.medId] || s.date > lastSaleByMed[i.medId]) {
+          lastSaleByMed[i.medId] = s.date;
+        }
+      });
+    });
+    return meds
+      .filter((m) => m.quantity > 0)
+      .filter((m) => {
+        const last = lastSaleByMed[m.id];
+        if (!last) return true; // jamais vendu
+        return -daysUntil(last) >= NO_MOVEMENT_DAYS;
+      })
+      .map((m) => ({ ...m, lastSale: lastSaleByMed[m.id] || null }));
+  }, [meds, sales]);
   // Nombre total de références qui nécessitent une action (rupture,
-  // stock bas, ou péremption proche) — affiché en pastille dans le menu.
+  // stock bas, péremption proche, ou aucun mouvement) — affiché en
+  // pastille dans le menu.
   const alertCount = useMemo(() => {
     const ids = new Set();
     lowStock.forEach((m) => ids.add(m.id));
     expiringSoon.forEach((m) => ids.add(m.id));
+    noMovement.forEach((m) => ids.add(m.id));
     return ids.size;
-  }, [lowStock, expiringSoon]);
+  }, [lowStock, expiringSoon, noMovement]);
 
   const todaySales = useMemo(() => {
     const t = todayISO();
@@ -410,6 +435,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         {tab === "alertes" && (
           <Alertes
             outOfStock={outOfStock} lowStock={lowStock} expiringSoon90={expiringSoon90}
+            noMovement={noMovement}
           />
         )}
         {tab === "stock" && (
@@ -449,9 +475,10 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
 
 // ================= ALERTES =================
 // Vue consolidée de tout ce qui demande une action : ruptures, stock
-// bas, et péremptions à venir (fenêtre élargie à 90 jours pour anticiper
-// les commandes). Chaque section peut être exportée en Excel séparément.
-function Alertes({ outOfStock, lowStock, expiringSoon90 }) {
+// bas, péremptions à venir (fenêtre élargie à 90 jours pour anticiper
+// les commandes), et produits sans mouvement (60+ jours sans vente).
+// Chaque section peut être exportée en Excel séparément.
+function Alertes({ outOfStock, lowStock, expiringSoon90, noMovement }) {
   const lowStockOnly = lowStock.filter((m) => m.quantity > 0); // hors ruptures, déjà listées à part
   const expired = expiringSoon90.filter((m) => daysUntil(m.expiry) < 0);
   const expiringNotExpired = expiringSoon90.filter((m) => daysUntil(m.expiry) >= 0);
@@ -472,8 +499,13 @@ function Alertes({ outOfStock, lowStock, expiringSoon90 }) {
     "Médicament": m.name, "Quantité": m.quantity, "Péremption": m.expiry,
     "Statut": expiryStatus(m.expiry).label,
   }));
+  const noMovementRows = noMovement.map((m) => ({
+    "Médicament": m.name, "Quantité": m.quantity,
+    "Dernière vente": m.lastSale || "Jamais vendu",
+    "Fournisseur": m.supplier || "",
+  }));
 
-  const totalAlerts = outOfStock.length + lowStockOnly.length + expiringSoon90.length;
+  const totalAlerts = outOfStock.length + lowStockOnly.length + expiringSoon90.length + noMovement.length;
 
   return (
     <div className="page">
@@ -485,7 +517,7 @@ function Alertes({ outOfStock, lowStock, expiringSoon90 }) {
             <button
               className="btn-ghost"
               onClick={() => exportSection(
-                [...ruptureRows, ...lowStockRows, ...expiryRows.map(r => ({ "Médicament": r["Médicament"], "Quantité": r["Quantité"], "Péremption": r["Péremption"], "Statut": r["Statut"] }))],
+                [...ruptureRows, ...lowStockRows, ...expiryRows.map(r => ({ "Médicament": r["Médicament"], "Quantité": r["Quantité"], "Péremption": r["Péremption"], "Statut": r["Statut"] })), ...noMovementRows],
                 "Alertes",
                 `alertes-${todayISO()}.xlsx`
               )}
@@ -574,6 +606,27 @@ function Alertes({ outOfStock, lowStock, expiringSoon90 }) {
                     </li>
                   );
                 })}
+              </ul>
+            </div>
+          )}
+
+          {noMovement.length > 0 && (
+            <div className="panel">
+              <div className="panel-head">
+                <h3><PackageSearch size={16} /> Produits sans mouvement, 60+ jours ({noMovement.length})</h3>
+                <button className="btn-ghost" onClick={() => exportSection(noMovementRows, "Sans mouvement", `sans-mouvement-${todayISO()}.xlsx`)}>
+                  <Download size={14} /> Exporter
+                </button>
+              </div>
+              <ul className="mini-list">
+                {noMovement.map((m) => (
+                  <li key={m.id}>
+                    <span className="mini-name">{m.name}</span>
+                    <span className="mini-meta">
+                      {m.lastSale ? `Dernière vente le ${m.lastSale}` : "Jamais vendu"}
+                    </span>
+                  </li>
+                ))}
               </ul>
             </div>
           )}
