@@ -7,6 +7,8 @@ import {
   getAcces, reparerAccesExistant, inviterEmploye, subscribeMembres, retirerEmploye,
   subscribeCompteurs,
   subscribeAbonnement, demarrerEssaiGratuit, creerLienPaiement, creerLienPaiementStripe,
+  subscribeFournisseurs, addFournisseur, updateFournisseur, deleteFournisseur,
+  subscribeCommandes, creerCommande, receptionnerCommande, annulerCommande,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -14,7 +16,8 @@ import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
-  UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe
+  UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
+  Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -226,6 +229,8 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [meds, setMeds] = useState([]);
   const [sales, setSales] = useState([]);
   const [clients, setClients] = useState([]);
+  const [fournisseurs, setFournisseurs] = useState([]);
+  const [commandes, setCommandes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [abonnement, setAbonnement] = useState(null);
@@ -246,6 +251,8 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     })();
 
     const unsubAbonnement = subscribeAbonnement(pharmacieId, setAbonnement);
+    const unsubFournisseurs = subscribeFournisseurs(pharmacieId, setFournisseurs);
+    const unsubCommandes = subscribeCommandes(pharmacieId, setCommandes);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -270,6 +277,8 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubSales();
       unsubClients();
       unsubAbonnement();
+      unsubFournisseurs();
+      unsubCommandes();
     };
   }, [pharmacieId]);
 
@@ -353,6 +362,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     { id: "stock", label: "Stock", icon: Package },
     { id: "ventes", label: "Ventes", icon: ShoppingCart },
     { id: "clients", label: "Clients", icon: Users },
+    { id: "fournisseurs", label: "Fournisseurs", icon: Truck },
     ...(role === "gerant" ? [{ id: "rapports", label: "Rapports", icon: BarChart3 }] : []),
     ...(role === "gerant" ? [{ id: "equipe", label: "Équipe", icon: UserPlus }] : []),
     ...(role === "gerant" ? [{ id: "abonnement", label: "Abonnement", icon: CreditCard }] : []),
@@ -449,6 +459,12 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         )}
         {tab === "clients" && (
           <Clients clients={clients} pharmacieId={pharmacieId} sales={sales} notify={notify} />
+        )}
+        {tab === "fournisseurs" && (
+          <Fournisseurs
+            fournisseurs={fournisseurs} commandes={commandes} meds={meds}
+            pharmacieId={pharmacieId} notify={notify}
+          />
         )}
         {tab === "rapports" && role === "gerant" && (
           <Rapports sales={sales} meds={meds} pharmacieId={pharmacieId} />
@@ -1511,6 +1527,370 @@ function ClientModal({ data, onClose, onSave }) {
         <button className="btn-ghost" onClick={onClose}>Annuler</button>
         <button className="btn-primary" disabled={!form.name.trim()} onClick={() => onSave(form)}>
           {data.id ? "Enregistrer" : "Ajouter"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ================= FOURNISSEURS =================
+// Deux vues : la liste des fiches fournisseurs (contact), et
+// l'historique des commandes passées auprès d'eux. La réception d'une
+// commande incrémente automatiquement le stock des articles concernés
+// (voir receptionnerCommande dans firebase.js).
+function Fournisseurs({ fournisseurs, commandes, meds, pharmacieId, notify }) {
+  const [vue, setVue] = useState("fournisseurs"); // "fournisseurs" | "commandes"
+  const [modal, setModal] = useState(null); // { id, ... } fiche fournisseur
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [commandeModal, setCommandeModal] = useState(false);
+  const [confirmReception, setConfirmReception] = useState(null);
+  const [query, setQuery] = useState("");
+
+  const filtered = fournisseurs.filter((f) => f.name.toLowerCase().includes(query.toLowerCase()));
+
+  function commandesDe(fournisseurId) {
+    return commandes.filter((c) => c.fournisseurId === fournisseurId);
+  }
+
+  async function handleSave(data) {
+    const { id, ...rest } = data;
+    if (id) {
+      await updateFournisseur(pharmacieId, id, rest);
+      notify("Fiche fournisseur mise à jour.");
+    } else {
+      await addFournisseur(pharmacieId, rest);
+      notify("Fournisseur ajouté.");
+    }
+    setModal(null);
+  }
+
+  async function handleDelete(id) {
+    await deleteFournisseur(pharmacieId, id);
+    notify("Fournisseur supprimé.", "danger");
+    setConfirmDelete(null);
+  }
+
+  async function handleReception(commande) {
+    try {
+      await receptionnerCommande(pharmacieId, commande);
+      notify(`Commande reçue · stock mis à jour (${commande.items.length} référence(s)).`);
+    } catch (e) {
+      notify(e.message || "Erreur lors de la réception.", "danger");
+    }
+    setConfirmReception(null);
+  }
+
+  async function handleAnnuler(commandeId) {
+    await annulerCommande(pharmacieId, commandeId);
+    notify("Commande annulée.", "danger");
+  }
+
+  const enAttente = commandes.filter((c) => c.statut === "en_attente");
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Fournisseurs"
+        sub={`${fournisseurs.length} fournisseur(s) · ${enAttente.length} commande(s) en attente`}
+        action={
+          <div className="page-actions">
+            <button className="btn-ghost" onClick={() => setVue(vue === "fournisseurs" ? "commandes" : "fournisseurs")}>
+              <ReceiptText size={16} /> {vue === "fournisseurs" ? "Voir les commandes" : "Voir les fournisseurs"}
+            </button>
+            {vue === "fournisseurs" ? (
+              <button className="btn-primary" onClick={() => setModal({ id: null, name: "", phone: "", email: "", address: "", notes: "" })}>
+                <Plus size={16} /> Ajouter un fournisseur
+              </button>
+            ) : (
+              <button className="btn-primary" disabled={fournisseurs.length === 0} onClick={() => setCommandeModal(true)}>
+                <Plus size={16} /> Nouvelle commande
+              </button>
+            )}
+          </div>
+        }
+      />
+
+      {vue === "fournisseurs" ? (
+        <>
+          <div className="toolbar">
+            <div className="search-box">
+              <Search size={15} />
+              <input placeholder="Rechercher un fournisseur…" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </div>
+          </div>
+
+          {filtered.length === 0 ? (
+            <EmptyRow text="Aucun fournisseur enregistré pour le moment." />
+          ) : (
+            <div className="client-grid">
+              {filtered.map((f) => {
+                const cmds = commandesDe(f.id);
+                const cmdsEnAttente = cmds.filter((c) => c.statut === "en_attente").length;
+                return (
+                  <div key={f.id} className="client-card">
+                    <div className="client-card-head">
+                      <div className="client-avatar"><Truck size={16} /></div>
+                      <div>
+                        <div className="mini-name">{f.name}</div>
+                        <div className="td-sub">{f.phone || "Téléphone non renseigné"}</div>
+                      </div>
+                    </div>
+                    {(f.email || f.address) && (
+                      <div className="fourn-contact">
+                        {f.email && <div className="td-sub"><Mail size={12} /> {f.email}</div>}
+                        {f.address && <div className="td-sub"><MapPin size={12} /> {f.address}</div>}
+                      </div>
+                    )}
+                    {f.notes && <p className="client-notes">{f.notes}</p>}
+                    <div className="client-card-foot">
+                      <span className="td-sub">
+                        {cmds.length} commande(s){cmdsEnAttente > 0 ? ` · ${cmdsEnAttente} en attente` : ""}
+                      </span>
+                      <div className="td-actions">
+                        <button className="icon-btn" onClick={() => setModal(f)}><Pencil size={14} /></button>
+                        <button className="icon-btn icon-danger" onClick={() => setConfirmDelete(f)}><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr><th>Date</th><th>Fournisseur</th><th>Articles</th><th>Total</th><th>Statut</th><th></th></tr>
+            </thead>
+            <tbody>
+              {commandes.length === 0 && (
+                <tr><td colSpan={6} className="table-empty">Aucune commande enregistrée pour le moment.</td></tr>
+              )}
+              {commandes.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.dateCommande}</td>
+                  <td className="td-strong">{c.fournisseurName}</td>
+                  <td className="td-sub">{c.items.map((i) => `${i.name} ×${i.qty}`).join(", ")}</td>
+                  <td className="td-strong">{fmtFCFA(c.total)}</td>
+                  <td>
+                    <Badge tone={c.statut === "recue" ? "ok" : "warn"}>
+                      {c.statut === "recue" ? "Reçue" : "En attente"}
+                    </Badge>
+                    {c.statut === "recue" && c.dateReception && (
+                      <div className="td-sub">le {c.dateReception}</div>
+                    )}
+                  </td>
+                  <td className="td-actions">
+                    {c.statut === "en_attente" && (
+                      <>
+                        <button className="icon-btn" onClick={() => setConfirmReception(c)} aria-label="Marquer reçue" title="Marquer reçue (met à jour le stock)">
+                          <PackageCheck size={15} />
+                        </button>
+                        <button className="icon-btn icon-danger" onClick={() => handleAnnuler(c.id)} aria-label="Annuler" title="Annuler la commande">
+                          <Ban size={15} />
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modal && (
+        <FournisseurModal data={modal} onClose={() => setModal(null)} onSave={handleSave} />
+      )}
+
+      {confirmDelete && (
+        <Modal title="Supprimer ce fournisseur ?" onClose={() => setConfirmDelete(null)}>
+          <p className="confirm-text">
+            « {confirmDelete.name} » sera retiré définitivement. Son historique de commandes reste conservé.
+          </p>
+          <div className="modal-actions">
+            <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>Annuler</button>
+            <button className="btn-danger" onClick={() => handleDelete(confirmDelete.id)}>Supprimer</button>
+          </div>
+        </Modal>
+      )}
+
+      {confirmReception && (
+        <Modal title="Marquer cette commande comme reçue ?" onClose={() => setConfirmReception(null)}>
+          <p className="confirm-text">
+            Le stock sera automatiquement augmenté pour chaque article de la commande « {confirmReception.fournisseurName} » du {confirmReception.dateCommande}.
+          </p>
+          <ul className="mini-list" style={{ padding: "0 18px" }}>
+            {confirmReception.items.map((i, idx) => (
+              <li key={idx}>
+                <span className="mini-name">{i.name}</span>
+                <span className="mini-meta">+{i.qty}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="modal-actions">
+            <button className="btn-ghost" onClick={() => setConfirmReception(null)}>Annuler</button>
+            <button className="btn-primary" onClick={() => handleReception(confirmReception)}>Confirmer la réception</button>
+          </div>
+        </Modal>
+      )}
+
+      {commandeModal && (
+        <CommandeModal
+          fournisseurs={fournisseurs}
+          meds={meds}
+          onClose={() => setCommandeModal(false)}
+          onSave={async (data) => {
+            await creerCommande(pharmacieId, data);
+            notify("Commande enregistrée.");
+            setCommandeModal(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function FournisseurModal({ data, onClose, onSave }) {
+  const [form, setForm] = useState(data);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  return (
+    <Modal title={data.id ? "Modifier le fournisseur" : "Ajouter un fournisseur"} onClose={onClose}>
+      <div className="form-grid form-grid-1">
+        <Field label="Nom du fournisseur">
+          <input value={form.name} onChange={set("name")} placeholder="Ex: LABOREX" />
+        </Field>
+        <Field label="Téléphone">
+          <input value={form.phone} onChange={set("phone")} placeholder="Ex: 27 20 00 00 00" />
+        </Field>
+        <Field label="Email">
+          <input type="email" value={form.email} onChange={set("email")} placeholder="contact@fournisseur.com" />
+        </Field>
+        <Field label="Adresse">
+          <input value={form.address} onChange={set("address")} placeholder="Ex: Zone 4, Abidjan" />
+        </Field>
+        <Field label="Notes">
+          <textarea value={form.notes} onChange={set("notes")} rows={3} placeholder="Conditions de livraison, délais habituels…" />
+        </Field>
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button className="btn-primary" disabled={!form.name.trim()} onClick={() => onSave(form)}>
+          {data.id ? "Enregistrer" : "Ajouter"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// Formulaire de création d'une commande : choix du fournisseur, ajout
+// d'articles (recherchés dans le stock existant) avec quantité et coût
+// unitaire d'achat. Le total est calculé automatiquement.
+function CommandeModal({ fournisseurs, meds, onClose, onSave }) {
+  const [fournisseurId, setFournisseurId] = useState(fournisseurs[0]?.id || "");
+  const [items, setItems] = useState([]); // {medId, name, qty, coutUnitaire}
+  const [query, setQuery] = useState("");
+  const [chargement, setChargement] = useState(false);
+
+  const results = useMemo(() => {
+    if (!query.trim()) return [];
+    return meds.filter((m) => m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 6);
+  }, [meds, query]);
+
+  function addItem(med) {
+    if (items.find((i) => i.medId === med.id)) { setQuery(""); return; }
+    setItems((its) => [...its, { medId: med.id, name: med.name, qty: 1, coutUnitaire: med.price }]);
+    setQuery("");
+  }
+
+  function updateItem(medId, field, value) {
+    setItems((its) => its.map((i) => (i.medId === medId ? { ...i, [field]: Math.max(0, Number(value) || 0) } : i)));
+  }
+
+  function removeItem(medId) {
+    setItems((its) => its.filter((i) => i.medId !== medId));
+  }
+
+  const total = items.reduce((s, i) => s + i.qty * i.coutUnitaire, 0);
+  const fournisseur = fournisseurs.find((f) => f.id === fournisseurId);
+
+  async function submit() {
+    if (!fournisseur || items.length === 0) return;
+    setChargement(true);
+    await onSave({
+      fournisseurId: fournisseur.id,
+      fournisseurName: fournisseur.name,
+      dateCommande: todayISO(),
+      items: items.map((i) => ({ medId: i.medId, name: i.name, qty: i.qty, coutUnitaire: i.coutUnitaire })),
+      total,
+    });
+    setChargement(false);
+  }
+
+  return (
+    <Modal title="Nouvelle commande fournisseur" onClose={onClose} wide>
+      <div className="form-grid form-grid-1">
+        <Field label="Fournisseur">
+          <select className="select" value={fournisseurId} onChange={(e) => setFournisseurId(e.target.value)}>
+            {fournisseurs.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
+        </Field>
+
+        <Field label="Ajouter un article">
+          <input placeholder="Rechercher un médicament du stock…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </Field>
+        {results.length > 0 && (
+          <ul className="result-list">
+            {results.map((m) => (
+              <li key={m.id} onClick={() => addItem(m)}>
+                <div>
+                  <div className="mini-name">{m.name}</div>
+                  <div className="td-sub">{m.quantity} en stock actuellement</div>
+                </div>
+                <Plus size={16} />
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {items.length > 0 && (
+          <ul className="cart-list">
+            {items.map((i) => (
+              <li key={i.medId} className="commande-item">
+                <div className="cart-item-name">{i.name}</div>
+                <input
+                  type="number" min="1" value={i.qty}
+                  onChange={(e) => updateItem(i.medId, "qty", e.target.value)}
+                  className="commande-input"
+                />
+                <input
+                  type="number" min="0" value={i.coutUnitaire}
+                  onChange={(e) => updateItem(i.medId, "coutUnitaire", e.target.value)}
+                  className="commande-input"
+                  title="Coût unitaire d'achat"
+                />
+                <button className="icon-btn icon-danger" onClick={() => removeItem(i.medId)}><Trash2 size={14} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {items.length > 0 && (
+          <div className="cart-total-row">
+            <span>Total commande</span>
+            <span className="cart-total">{fmtFCFA(total)}</span>
+          </div>
+        )}
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button
+          className="btn-primary"
+          disabled={!fournisseur || items.length === 0 || chargement}
+          onClick={submit}
+        >
+          {chargement ? "Un instant…" : "Enregistrer la commande"}
         </button>
       </div>
     </Modal>
