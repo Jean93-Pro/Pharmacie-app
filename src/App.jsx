@@ -10,6 +10,7 @@ import {
   subscribeFournisseurs, addFournisseur, updateFournisseur, deleteFournisseur,
   subscribeCommandes, creerCommande, receptionnerCommande, annulerCommande,
   subscribeRetours, creerRetour,
+  addLotAMed, subscribeOrdonnances, addOrdonnance, updateOrdonnance, deleteOrdonnance,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -18,7 +19,8 @@ import {
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
-  Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw
+  Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
+  Stethoscope, Tag, HardDriveDownload
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -233,6 +235,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [fournisseurs, setFournisseurs] = useState([]);
   const [commandes, setCommandes] = useState([]);
   const [retours, setRetours] = useState([]);
+  const [ordonnances, setOrdonnances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [abonnement, setAbonnement] = useState(null);
@@ -256,6 +259,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubFournisseurs = subscribeFournisseurs(pharmacieId, setFournisseurs);
     const unsubCommandes = subscribeCommandes(pharmacieId, setCommandes);
     const unsubRetours = subscribeRetours(pharmacieId, setRetours);
+    const unsubOrdonnances = subscribeOrdonnances(pharmacieId, setOrdonnances);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -283,6 +287,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubFournisseurs();
       unsubCommandes();
       unsubRetours();
+      unsubOrdonnances();
     };
   }, [pharmacieId]);
 
@@ -367,6 +372,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     { id: "ventes", label: "Ventes", icon: ShoppingCart },
     { id: "clients", label: "Clients", icon: Users },
     { id: "fournisseurs", label: "Fournisseurs", icon: Truck },
+    { id: "ordonnances", label: "Ordonnances", icon: Stethoscope },
     ...(role === "gerant" ? [{ id: "rapports", label: "Rapports", icon: BarChart3 }] : []),
     ...(role === "gerant" ? [{ id: "equipe", label: "Équipe", icon: UserPlus }] : []),
     ...(role === "gerant" ? [{ id: "abonnement", label: "Abonnement", icon: CreditCard }] : []),
@@ -470,8 +476,18 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
             pharmacieId={pharmacieId} notify={notify}
           />
         )}
+        {tab === "ordonnances" && (
+          <Ordonnances
+            ordonnances={ordonnances} clients={clients}
+            pharmacieId={pharmacieId} notify={notify}
+          />
+        )}
         {tab === "rapports" && role === "gerant" && (
-          <Rapports sales={sales} meds={meds} pharmacieId={pharmacieId} />
+          <Rapports
+            sales={sales} meds={meds} pharmacieId={pharmacieId}
+            clients={clients} fournisseurs={fournisseurs} commandes={commandes}
+            retours={retours} ordonnances={ordonnances}
+          />
         )}
         {tab === "equipe" && role === "gerant" && (
           <Equipe pharmacieId={pharmacieId} notify={notify} />
@@ -1080,6 +1096,8 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
         <MedModal
           mode={modal.mode}
           data={modal.data}
+          pharmacieId={pharmacieId}
+          notify={notify}
           onClose={() => setModal(null)}
           onSave={handleSave}
         />
@@ -1107,12 +1125,39 @@ function emptyMed() {
   };
 }
 
-function MedModal({ mode, data, onClose, onSave }) {
+function MedModal({ mode, data, pharmacieId, notify, onClose, onSave }) {
   const [form, setForm] = useState(data);
+  const [nouveauLot, setNouveauLot] = useState({ numero: "", quantity: "", expiry: "" });
+  const [ajoutLotEnCours, setAjoutLotEnCours] = useState(false);
   const set = (k) => (e) => {
     const v = e.target.type === "number" ? Number(e.target.value) : e.target.value;
     setForm((f) => ({ ...f, [k]: v }));
   };
+
+  const lots = [...(form.lots || [])].sort((a, b) => (a.expiry || "").localeCompare(b.expiry || ""));
+
+  async function handleAjoutLot() {
+    if (!nouveauLot.numero.trim() || !nouveauLot.quantity || Number(nouveauLot.quantity) <= 0) return;
+    setAjoutLotEnCours(true);
+    try {
+      await addLotAMed(pharmacieId, form.id, {
+        numero: nouveauLot.numero.trim(),
+        quantity: Number(nouveauLot.quantity),
+        expiry: nouveauLot.expiry || null,
+      });
+      notify(`Lot ${nouveauLot.numero} ajouté (+${nouveauLot.quantity}).`);
+      setForm((f) => ({
+        ...f,
+        quantity: f.quantity + Number(nouveauLot.quantity),
+        lots: [...(f.lots || []), { numero: nouveauLot.numero.trim(), quantity: Number(nouveauLot.quantity), expiry: nouveauLot.expiry || null, dateReception: todayISO() }],
+      }));
+      setNouveauLot({ numero: "", quantity: "", expiry: "" });
+    } catch (e) {
+      notify(e.message || "Erreur lors de l'ajout du lot.", "danger");
+    }
+    setAjoutLotEnCours(false);
+  }
+
   return (
     <Modal title={mode === "new" ? "Ajouter un médicament" : "Modifier le médicament"} onClose={onClose} wide>
       <div className="form-grid">
@@ -1143,6 +1188,39 @@ function MedModal({ mode, data, onClose, onSave }) {
           <input type="date" value={form.expiry} onChange={set("expiry")} />
         </Field>
       </div>
+
+      {mode === "edit" && (
+        <div className="lots-section">
+          <div className="panel-head" style={{ marginTop: 16 }}>
+            <h3><Tag size={15} /> Traçabilité des lots</h3>
+          </div>
+          {lots.length === 0 ? (
+            <p className="td-sub">Aucun lot enregistré pour cet article pour l'instant.</p>
+          ) : (
+            <ul className="mini-list">
+              {lots.map((l, idx) => (
+                <li key={idx}>
+                  <span className="mini-name">Lot {l.numero}</span>
+                  <span className="mini-meta">
+                    +{l.quantity} · {l.expiry ? `péremption ${l.expiry}` : "péremption non précisée"}
+                    {l.fournisseur ? ` · ${l.fournisseur}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="lot-add-row">
+            <input placeholder="N° de lot" value={nouveauLot.numero} onChange={(e) => setNouveauLot((l) => ({ ...l, numero: e.target.value }))} />
+            <input type="number" min="1" placeholder="Quantité" value={nouveauLot.quantity} onChange={(e) => setNouveauLot((l) => ({ ...l, quantity: e.target.value }))} />
+            <input type="date" value={nouveauLot.expiry} onChange={(e) => setNouveauLot((l) => ({ ...l, expiry: e.target.value }))} />
+            <button className="btn-ghost" disabled={ajoutLotEnCours} onClick={handleAjoutLot}>
+              <Plus size={14} /> Ajouter ce lot
+            </button>
+          </div>
+          <p className="td-sub" style={{ marginTop: 4 }}>Ajouter un lot ici augmente aussi la quantité en stock ci-dessus.</p>
+        </div>
+      )}
+
       <div className="modal-actions">
         <button className="btn-ghost" onClick={onClose}>Annuler</button>
         <button
@@ -1649,6 +1727,210 @@ function ClientModal({ data, onClose, onSave }) {
   );
 }
 
+// ================= ORDONNANCES =================
+// Suivi des prescriptions par client, indépendant du stock : les
+// médicaments prescrits sont saisis en texte libre (nom + posologie),
+// pour couvrir aussi les produits non vendus par l'officine ou les
+// instructions qui n'ont pas leur place dans une fiche article.
+function Ordonnances({ ordonnances, clients, pharmacieId, notify }) {
+  const [modal, setModal] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [filtre, setFiltre] = useState("Toutes");
+  const [query, setQuery] = useState("");
+
+  const filtered = ordonnances
+    .filter((o) => (filtre === "Toutes" ? true : o.statut === filtre))
+    .filter((o) => o.clientName.toLowerCase().includes(query.toLowerCase()));
+
+  async function handleSave(data) {
+    const { id, ...rest } = data;
+    if (id) {
+      await updateOrdonnance(pharmacieId, id, rest);
+      notify("Ordonnance mise à jour.");
+    } else {
+      await addOrdonnance(pharmacieId, rest);
+      notify("Ordonnance enregistrée.");
+    }
+    setModal(null);
+  }
+
+  async function handleDelete(id) {
+    await deleteOrdonnance(pharmacieId, id);
+    notify("Ordonnance supprimée.", "danger");
+    setConfirmDelete(null);
+  }
+
+  async function toggleStatut(o) {
+    await updateOrdonnance(pharmacieId, o.id, { statut: o.statut === "en_cours" ? "terminee" : "en_cours" });
+  }
+
+  const enCours = ordonnances.filter((o) => o.statut === "en_cours").length;
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Ordonnances"
+        sub={`${ordonnances.length} ordonnance(s) · ${enCours} en cours`}
+        action={
+          <button
+            className="btn-primary"
+            onClick={() => setModal({ id: null, clientName: "", medecin: "", date: todayISO(), medicaments: [{ name: "", posologie: "" }], statut: "en_cours", notes: "" })}
+          >
+            <Plus size={16} /> Nouvelle ordonnance
+          </button>
+        }
+      />
+
+      <div className="toolbar">
+        <div className="search-box">
+          <Search size={15} />
+          <input placeholder="Rechercher un client…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        <select className="select" value={filtre} onChange={(e) => setFiltre(e.target.value)}>
+          <option>Toutes</option>
+          <option value="en_cours">En cours</option>
+          <option value="terminee">Terminées</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyRow text="Aucune ordonnance enregistrée pour le moment." />
+      ) : (
+        <div className="client-grid">
+          {filtered.map((o) => (
+            <div key={o.id} className="client-card">
+              <div className="client-card-head">
+                <div className="client-avatar"><Stethoscope size={16} /></div>
+                <div>
+                  <div className="mini-name">{o.clientName}</div>
+                  <div className="td-sub">{o.medecin ? `Dr. ${o.medecin}` : "Médecin non renseigné"} · {o.date}</div>
+                </div>
+              </div>
+              <ul className="mini-list">
+                {o.medicaments.filter((m) => m.name).map((m, idx) => (
+                  <li key={idx}>
+                    <span className="mini-name">{m.name}</span>
+                    <span className="mini-meta">{m.posologie}</span>
+                  </li>
+                ))}
+              </ul>
+              {o.notes && <p className="client-notes">{o.notes}</p>}
+              <div className="client-card-foot">
+                <button className="link-btn" style={{ padding: 0 }} onClick={() => toggleStatut(o)}>
+                  <Badge tone={o.statut === "en_cours" ? "warn" : "ok"}>
+                    {o.statut === "en_cours" ? "En cours — marquer terminée" : "Terminée — remettre en cours"}
+                  </Badge>
+                </button>
+                <div className="td-actions">
+                  <button className="icon-btn" onClick={() => setModal(o)}><Pencil size={14} /></button>
+                  <button className="icon-btn icon-danger" onClick={() => setConfirmDelete(o)}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modal && (
+        <OrdonnanceModal data={modal} clients={clients} onClose={() => setModal(null)} onSave={handleSave} />
+      )}
+
+      {confirmDelete && (
+        <Modal title="Supprimer cette ordonnance ?" onClose={() => setConfirmDelete(null)}>
+          <p className="confirm-text">
+            L'ordonnance de « {confirmDelete.clientName} » du {confirmDelete.date} sera retirée définitivement.
+          </p>
+          <div className="modal-actions">
+            <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>Annuler</button>
+            <button className="btn-danger" onClick={() => handleDelete(confirmDelete.id)}>Supprimer</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function OrdonnanceModal({ data, clients, onClose, onSave }) {
+  const [form, setForm] = useState(data);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  function updateMedLigne(idx, field, value) {
+    setForm((f) => ({
+      ...f,
+      medicaments: f.medicaments.map((m, i) => (i === idx ? { ...m, [field]: value } : m)),
+    }));
+  }
+  function addMedLigne() {
+    setForm((f) => ({ ...f, medicaments: [...f.medicaments, { name: "", posologie: "" }] }));
+  }
+  function removeMedLigne(idx) {
+    setForm((f) => ({ ...f, medicaments: f.medicaments.filter((_, i) => i !== idx) }));
+  }
+
+  const medicamentsValides = form.medicaments.filter((m) => m.name.trim());
+
+  return (
+    <Modal title={data.id ? "Modifier l'ordonnance" : "Nouvelle ordonnance"} onClose={onClose} wide>
+      <div className="form-grid form-grid-1">
+        <Field label="Client">
+          <input list="ordo-clients" value={form.clientName} onChange={set("clientName")} placeholder="Nom du client" />
+          <datalist id="ordo-clients">
+            {clients.map((c) => <option key={c.id} value={c.name} />)}
+          </datalist>
+        </Field>
+        <div className="form-grid">
+          <Field label="Médecin prescripteur">
+            <input value={form.medecin} onChange={set("medecin")} placeholder="Ex: Dr. Kouassi" />
+          </Field>
+          <Field label="Date">
+            <input type="date" value={form.date} onChange={set("date")} />
+          </Field>
+        </div>
+
+        <Field label="Médicaments prescrits">
+          <ul className="cart-list">
+            {form.medicaments.map((m, idx) => (
+              <li key={idx} className="commande-item">
+                <input
+                  placeholder="Nom du médicament"
+                  value={m.name}
+                  onChange={(e) => updateMedLigne(idx, "name", e.target.value)}
+                  className="cart-item-name"
+                  style={{ border: "1px solid var(--line)", borderRadius: 7, padding: "6px 8px" }}
+                />
+                <input
+                  placeholder="Posologie (ex: 1cp x3/j, 5j)"
+                  value={m.posologie}
+                  onChange={(e) => updateMedLigne(idx, "posologie", e.target.value)}
+                  className="commande-input commande-input-lot"
+                />
+                <button className="icon-btn icon-danger" onClick={() => removeMedLigne(idx)}><Trash2 size={14} /></button>
+              </li>
+            ))}
+          </ul>
+          <button className="btn-ghost" style={{ marginTop: 8 }} onClick={addMedLigne}>
+            <Plus size={14} /> Ajouter une ligne
+          </button>
+        </Field>
+
+        <Field label="Notes">
+          <textarea value={form.notes} onChange={set("notes")} rows={2} placeholder="Remarques, contre-indications, renouvellement…" />
+        </Field>
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button
+          className="btn-primary"
+          disabled={!form.clientName.trim() || medicamentsValides.length === 0}
+          onClick={() => onSave({ ...form, medicaments: medicamentsValides })}
+        >
+          {data.id ? "Enregistrer" : "Créer l'ordonnance"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 // ================= FOURNISSEURS =================
 // Deux vues : la liste des fiches fournisseurs (contact), et
 // l'historique des commandes passées auprès d'eux. La réception d'une
@@ -1905,7 +2187,7 @@ function FournisseurModal({ data, onClose, onSave }) {
 // unitaire d'achat. Le total est calculé automatiquement.
 function CommandeModal({ fournisseurs, meds, onClose, onSave }) {
   const [fournisseurId, setFournisseurId] = useState(fournisseurs[0]?.id || "");
-  const [items, setItems] = useState([]); // {medId, name, qty, coutUnitaire}
+  const [items, setItems] = useState([]); // {medId, name, qty, coutUnitaire, lotNumero, lotExpiry}
   const [query, setQuery] = useState("");
   const [chargement, setChargement] = useState(false);
 
@@ -1916,12 +2198,16 @@ function CommandeModal({ fournisseurs, meds, onClose, onSave }) {
 
   function addItem(med) {
     if (items.find((i) => i.medId === med.id)) { setQuery(""); return; }
-    setItems((its) => [...its, { medId: med.id, name: med.name, qty: 1, coutUnitaire: med.price }]);
+    setItems((its) => [...its, { medId: med.id, name: med.name, qty: 1, coutUnitaire: med.price, lotNumero: "", lotExpiry: "" }]);
     setQuery("");
   }
 
-  function updateItem(medId, field, value) {
+  function updateItemNum(medId, field, value) {
     setItems((its) => its.map((i) => (i.medId === medId ? { ...i, [field]: Math.max(0, Number(value) || 0) } : i)));
+  }
+
+  function updateItemText(medId, field, value) {
+    setItems((its) => its.map((i) => (i.medId === medId ? { ...i, [field]: value } : i)));
   }
 
   function removeItem(medId) {
@@ -1938,7 +2224,10 @@ function CommandeModal({ fournisseurs, meds, onClose, onSave }) {
       fournisseurId: fournisseur.id,
       fournisseurName: fournisseur.name,
       dateCommande: todayISO(),
-      items: items.map((i) => ({ medId: i.medId, name: i.name, qty: i.qty, coutUnitaire: i.coutUnitaire })),
+      items: items.map((i) => ({
+        medId: i.medId, name: i.name, qty: i.qty, coutUnitaire: i.coutUnitaire,
+        lotNumero: i.lotNumero || "", lotExpiry: i.lotExpiry || "",
+      })),
       total,
     });
     setChargement(false);
@@ -1973,18 +2262,30 @@ function CommandeModal({ fournisseurs, meds, onClose, onSave }) {
         {items.length > 0 && (
           <ul className="cart-list">
             {items.map((i) => (
-              <li key={i.medId} className="commande-item">
+              <li key={i.medId} className="commande-item commande-item-lot">
                 <div className="cart-item-name">{i.name}</div>
                 <input
                   type="number" min="1" value={i.qty}
-                  onChange={(e) => updateItem(i.medId, "qty", e.target.value)}
-                  className="commande-input"
+                  onChange={(e) => updateItemNum(i.medId, "qty", e.target.value)}
+                  className="commande-input" title="Quantité"
                 />
                 <input
                   type="number" min="0" value={i.coutUnitaire}
-                  onChange={(e) => updateItem(i.medId, "coutUnitaire", e.target.value)}
+                  onChange={(e) => updateItemNum(i.medId, "coutUnitaire", e.target.value)}
                   className="commande-input"
                   title="Coût unitaire d'achat"
+                />
+                <input
+                  type="text" value={i.lotNumero}
+                  onChange={(e) => updateItemText(i.medId, "lotNumero", e.target.value)}
+                  className="commande-input commande-input-lot"
+                  placeholder="N° de lot (optionnel)"
+                />
+                <input
+                  type="date" value={i.lotExpiry}
+                  onChange={(e) => updateItemText(i.medId, "lotExpiry", e.target.value)}
+                  className="commande-input commande-input-lot"
+                  title="Péremption du lot (optionnel)"
                 />
                 <button className="icon-btn icon-danger" onClick={() => removeItem(i.medId)}><Trash2 size={14} /></button>
               </li>
@@ -2147,7 +2448,7 @@ function traduireErreurInvite(code) {
 }
 
 
-function Rapports({ sales, meds, pharmacieId }) {
+function Rapports({ sales, meds, pharmacieId, clients, fournisseurs, commandes, retours, ordonnances }) {
   // CA total et nombre de ventes sur TOUTE la durée de vie de la
   // pharmacie — lus depuis un compteur global (1 lecture), plutôt que
   // resommés depuis `sales`, qui ne contient que les ventes récentes.
@@ -2216,15 +2517,73 @@ function Rapports({ sales, meds, pharmacieId }) {
     );
   }
 
+  // Sauvegarde complète : toutes les données de la pharmacie (stock,
+  // ventes, clients, fournisseurs, commandes, retours, ordonnances)
+  // dans un seul classeur Excel multi-feuilles — utile comme copie de
+  // secours ou pour migrer/analyser les données ailleurs.
+  function handleExportComplet() {
+    const stockRows = meds.map((m) => ({
+      "Médicament": m.name, "Catégorie": m.category, "Unité": m.unit,
+      "Quantité": m.quantity, "Seuil d'alerte": m.minStock,
+      "Prix unitaire (FCFA)": m.price, "Péremption": m.expiry,
+      "Fournisseur": m.supplier || "",
+      "Lots": (m.lots || []).map((l) => `${l.numero} (×${l.quantity}${l.expiry ? `, exp. ${l.expiry}` : ""})`).join(" | "),
+    }));
+    const ventesRows = sales.map((s) => ({
+      "Date": s.date, "Heure": s.time, "Client": s.client, "Vendu par": s.employeEmail || "",
+      "Articles": s.items.map((i) => `${i.name} x${i.qty}`).join(", "), "Total (FCFA)": s.total,
+    }));
+    const clientsRows = clients.map((c) => ({
+      "Nom": c.name, "Téléphone": c.phone || "", "Notes": c.notes || "",
+    }));
+    const fournisseursRows = (fournisseurs || []).map((f) => ({
+      "Nom": f.name, "Téléphone": f.phone || "", "Email": f.email || "",
+      "Adresse": f.address || "", "Notes": f.notes || "",
+    }));
+    const commandesRows = (commandes || []).map((c) => ({
+      "Date": c.dateCommande, "Fournisseur": c.fournisseurName,
+      "Articles": c.items.map((i) => `${i.name} x${i.qty}`).join(", "),
+      "Total (FCFA)": c.total, "Statut": c.statut, "Date réception": c.dateReception || "",
+    }));
+    const retoursRows = (retours || []).map((r) => ({
+      "Date": r.date, "Vente d'origine": r.saleId,
+      "Articles": r.items.map((i) => `${i.name} x${i.qty}`).join(", "),
+      "Montant remboursé (FCFA)": r.total, "Motif": r.motif || "",
+    }));
+    const ordonnancesRows = (ordonnances || []).map((o) => ({
+      "Client": o.clientName, "Médecin": o.medecin || "", "Date": o.date,
+      "Médicaments": o.medicaments.map((m) => `${m.name} (${m.posologie})`).join(", "),
+      "Statut": o.statut === "en_cours" ? "En cours" : "Terminée", "Notes": o.notes || "",
+    }));
+
+    exportToExcel(
+      [
+        { name: "Stock", rows: stockRows },
+        { name: "Ventes", rows: ventesRows },
+        { name: "Clients", rows: clientsRows },
+        { name: "Fournisseurs", rows: fournisseursRows },
+        { name: "Commandes", rows: commandesRows },
+        { name: "Retours", rows: retoursRows },
+        { name: "Ordonnances", rows: ordonnancesRows },
+      ],
+      `sauvegarde-complete-${todayISO()}.xlsx`
+    );
+  }
+
   return (
     <div className="page">
       <PageHead
         title="Rapports"
         sub="Performance de l'officine"
         action={
-          <button className="btn-ghost" onClick={handleExport}>
-            <Download size={16} /> Exporter
-          </button>
+          <div className="page-actions">
+            <button className="btn-ghost" onClick={handleExportComplet}>
+              <HardDriveDownload size={16} /> Sauvegarde complète
+            </button>
+            <button className="btn-ghost" onClick={handleExport}>
+              <Download size={16} /> Exporter
+            </button>
+          </div>
         }
       />
 
