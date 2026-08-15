@@ -313,6 +313,91 @@ export async function deleteClient(pharmacieId, clientId) {
 }
 
 // ---------------------------------------------------------------
+// FOURNISSEURS — fiche contact par fournisseur, et un historique de
+// commandes indépendant (collection "commandes"). Chaque commande
+// référence son fournisseur par id et par nom (le nom est dupliqué
+// pour continuer à s'afficher même si la fiche fournisseur est
+// supprimée plus tard).
+// ---------------------------------------------------------------
+export function subscribeFournisseurs(pharmacieId, callback) {
+  const ref = collection(db, "pharmacies", pharmacieId, "fournisseurs");
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function addFournisseur(pharmacieId, data) {
+  const ref = collection(db, "pharmacies", pharmacieId, "fournisseurs");
+  await addDoc(ref, data);
+}
+
+export async function updateFournisseur(pharmacieId, id, data) {
+  await updateDoc(doc(db, "pharmacies", pharmacieId, "fournisseurs", id), data);
+}
+
+export async function deleteFournisseur(pharmacieId, id) {
+  await deleteDoc(doc(db, "pharmacies", pharmacieId, "fournisseurs", id));
+}
+
+// ---------------------------------------------------------------
+// COMMANDES FOURNISSEURS
+// pharmacies/{pharmacieId}/commandes/{commandeId} :
+//   { fournisseurId, fournisseurName, items: [{medId,name,qty,coutUnitaire}],
+//     total, statut: "en_attente" | "recue", createdAt, dateReception }
+// La réception d'une commande passe OBLIGATOIREMENT par receptionnerCommande
+// (transaction) : elle incrémente le stock de chaque article ET marque la
+// commande "recue" en une seule opération atomique, pour éviter qu'une
+// commande soit marquée reçue sans que le stock soit vraiment mis à jour
+// (ou l'inverse) en cas de coupure réseau au mauvais moment.
+// ---------------------------------------------------------------
+export function subscribeCommandes(pharmacieId, callback, max = 500) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "commandes"),
+    orderBy("createdAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function creerCommande(pharmacieId, data) {
+  const ref = collection(db, "pharmacies", pharmacieId, "commandes");
+  await addDoc(ref, {
+    ...data,
+    statut: "en_attente",
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function receptionnerCommande(pharmacieId, commande) {
+  const commandeRef = doc(db, "pharmacies", pharmacieId, "commandes", commande.id);
+
+  await runTransaction(db, async (tx) => {
+    const medRefs = commande.items.map((i) =>
+      doc(db, "pharmacies", pharmacieId, "meds", i.medId)
+    );
+    const medSnaps = await Promise.all(medRefs.map((ref) => tx.get(ref)));
+
+    medSnaps.forEach((snap, idx) => {
+      const item = commande.items[idx];
+      if (snap.exists()) {
+        tx.update(medRefs[idx], { quantity: snap.data().quantity + item.qty });
+      }
+    });
+
+    tx.update(commandeRef, {
+      statut: "recue",
+      dateReception: new Date().toISOString().slice(0, 10),
+    });
+  });
+}
+
+export async function annulerCommande(pharmacieId, commandeId) {
+  await deleteDoc(doc(db, "pharmacies", pharmacieId, "commandes", commandeId));
+}
+
+// ---------------------------------------------------------------
 // ABONNEMENT & PAIEMENT
 // pharmacies/{pharmacieId}/meta/abonnement : { plan, statut, dateFin }
 // - Le document est créé côté client UNE SEULE FOIS, avec un essai
