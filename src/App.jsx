@@ -9,6 +9,7 @@ import {
   subscribeAbonnement, demarrerEssaiGratuit, creerLienPaiement, creerLienPaiementStripe,
   subscribeFournisseurs, addFournisseur, updateFournisseur, deleteFournisseur,
   subscribeCommandes, creerCommande, receptionnerCommande, annulerCommande,
+  subscribeRetours, creerRetour,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -17,7 +18,7 @@ import {
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
-  Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban
+  Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -231,6 +232,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [clients, setClients] = useState([]);
   const [fournisseurs, setFournisseurs] = useState([]);
   const [commandes, setCommandes] = useState([]);
+  const [retours, setRetours] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [abonnement, setAbonnement] = useState(null);
@@ -253,6 +255,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubAbonnement = subscribeAbonnement(pharmacieId, setAbonnement);
     const unsubFournisseurs = subscribeFournisseurs(pharmacieId, setFournisseurs);
     const unsubCommandes = subscribeCommandes(pharmacieId, setCommandes);
+    const unsubRetours = subscribeRetours(pharmacieId, setRetours);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -279,6 +282,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubAbonnement();
       unsubFournisseurs();
       unsubCommandes();
+      unsubRetours();
     };
   }, [pharmacieId]);
 
@@ -453,7 +457,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         )}
         {tab === "ventes" && (
           <Ventes
-            meds={meds} sales={sales} clients={clients}
+            meds={meds} sales={sales} clients={clients} retours={retours}
             pharmacieId={pharmacieId} pharmacieEmail={pharmacieEmail} notify={notify}
           />
         )}
@@ -1154,12 +1158,13 @@ function MedModal({ mode, data, onClose, onSave }) {
 }
 
 // ================= VENTES (POS) =================
-function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
+function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, notify }) {
   const [cart, setCart] = useState([]); // {medId, name, price, qty, maxQty}
   const [query, setQuery] = useState("");
   const [clientName, setClientName] = useState("");
   const [history, setHistory] = useState(false);
   const [receiptSale, setReceiptSale] = useState(null);
+  const [retourSale, setRetourSale] = useState(null);
 
   const results = useMemo(() => {
     if (!query.trim()) return [];
@@ -1265,7 +1270,7 @@ function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
       />
 
       {history ? (
-        <SalesHistory sales={sales} onPrint={setReceiptSale} />
+        <SalesHistory sales={sales} retours={retours} onPrint={setReceiptSale} onRetour={setRetourSale} />
       ) : (
         <div className="pos-grid">
           <div className="panel">
@@ -1346,12 +1351,30 @@ function Ventes({ meds, sales, clients, pharmacieId, pharmacieEmail, notify }) {
           onClose={() => setReceiptSale(null)}
         />
       )}
+
+      {retourSale && (
+        <RetourModal
+          sale={retourSale}
+          retours={retours}
+          onClose={() => setRetourSale(null)}
+          onSave={async (items, motif) => {
+            await creerRetour(pharmacieId, retourSale.id, items, motif);
+            notify("Retour enregistré · stock mis à jour.", "danger");
+            setRetourSale(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function SalesHistory({ sales, onPrint }) {
+function SalesHistory({ sales, retours, onPrint, onRetour }) {
   if (sales.length === 0) return <EmptyRow text="Aucune vente enregistrée pour le moment." />;
+
+  function retourneDeja(saleId) {
+    return retours.filter((r) => r.saleId === saleId).reduce((sum, r) => sum + r.total, 0);
+  }
+
   return (
     <div className="table-wrap">
       <table className="table">
@@ -1359,26 +1382,119 @@ function SalesHistory({ sales, onPrint }) {
           <tr><th>Date</th><th>Heure</th><th>Client</th><th>Vendu par</th><th>Articles</th><th>Total</th><th></th></tr>
         </thead>
         <tbody>
-          {sales.map((s) => (
-            <tr key={s.id}>
-              <td>{s.date}</td>
-              <td>{s.time}</td>
-              <td>{s.client}</td>
-              <td className="td-sub">{s.employeEmail || "—"}</td>
-              <td className="td-sub">{s.items.map((i) => `${i.name} ×${i.qty}`).join(", ")}</td>
-              <td className="td-strong">{fmtFCFA(s.total)}</td>
-              <td className="td-actions">
-                <button className="icon-btn" onClick={() => onPrint(s)} aria-label="Imprimer le reçu">
-                  <ReceiptText size={14} />
-                </button>
-              </td>
-            </tr>
-          ))}
+          {sales.map((s) => {
+            const dejaRetourne = retourneDeja(s.id);
+            return (
+              <tr key={s.id}>
+                <td>{s.date}</td>
+                <td>{s.time}</td>
+                <td>{s.client}</td>
+                <td className="td-sub">{s.employeEmail || "—"}</td>
+                <td className="td-sub">{s.items.map((i) => `${i.name} ×${i.qty}`).join(", ")}</td>
+                <td className="td-strong">
+                  {fmtFCFA(s.total)}
+                  {dejaRetourne > 0 && <div className="td-sub">− {fmtFCFA(dejaRetourne)} retourné</div>}
+                </td>
+                <td className="td-actions">
+                  <button className="icon-btn" onClick={() => onRetour(s)} aria-label="Enregistrer un retour" title="Enregistrer un retour">
+                    <RotateCcw size={14} />
+                  </button>
+                  <button className="icon-btn" onClick={() => onPrint(s)} aria-label="Imprimer le reçu">
+                    <ReceiptText size={14} />
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
+
+// Formulaire de retour : pour chaque article de la vente, l'utilisateur
+// choisit la quantité retournée (plafonnée à ce qui reste après les
+// éventuels retours précédents sur cette même vente).
+function RetourModal({ sale, retours, onClose, onSave }) {
+  const dejaRetourneParArticle = useMemo(() => {
+    const map = {};
+    retours.filter((r) => r.saleId === sale.id).forEach((r) => {
+      r.items.forEach((i) => { map[i.medId] = (map[i.medId] || 0) + i.qty; });
+    });
+    return map;
+  }, [retours, sale.id]);
+
+  const articlesDisponibles = sale.items
+    .map((i) => ({ ...i, maxRetour: i.qty - (dejaRetourneParArticle[i.medId] || 0) }))
+    .filter((i) => i.maxRetour > 0);
+
+  const [qtes, setQtes] = useState(() => Object.fromEntries(articlesDisponibles.map((i) => [i.medId, 0])));
+  const [motif, setMotif] = useState("");
+  const [chargement, setChargement] = useState(false);
+
+  function setQte(medId, value, max) {
+    const v = Math.max(0, Math.min(max, Number(value) || 0));
+    setQtes((q) => ({ ...q, [medId]: v }));
+  }
+
+  const items = articlesDisponibles
+    .map((i) => ({ medId: i.medId, name: i.name, price: i.price, qty: qtes[i.medId] || 0 }))
+    .filter((i) => i.qty > 0);
+  const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+
+  async function submit() {
+    if (items.length === 0) return;
+    setChargement(true);
+    await onSave(items, motif);
+    setChargement(false);
+  }
+
+  return (
+    <Modal title="Enregistrer un retour" onClose={onClose} wide>
+      {articlesDisponibles.length === 0 ? (
+        <p className="confirm-text">Tous les articles de cette vente ont déjà été retournés.</p>
+      ) : (
+        <div className="form-grid form-grid-1">
+          <ul className="cart-list">
+            {articlesDisponibles.map((i) => (
+              <li key={i.medId} className="commande-item">
+                <div className="cart-item-name">
+                  {i.name}
+                  <div className="td-sub">vendu ×{i.qty}{i.maxRetour < i.qty ? ` · déjà retourné ×${i.qty - i.maxRetour}` : ""}</div>
+                </div>
+                <input
+                  type="number" min="0" max={i.maxRetour}
+                  value={qtes[i.medId] || 0}
+                  onChange={(e) => setQte(i.medId, e.target.value, i.maxRetour)}
+                  className="commande-input"
+                />
+                <span className="td-sub">/ {i.maxRetour} max</span>
+              </li>
+            ))}
+          </ul>
+          <Field label="Motif (optionnel)">
+            <input value={motif} onChange={(e) => setMotif(e.target.value)} placeholder="Ex: produit défectueux, erreur de commande…" />
+          </Field>
+          {total > 0 && (
+            <div className="cart-total-row">
+              <span>Montant à rembourser</span>
+              <span className="cart-total">{fmtFCFA(total)}</span>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        {articlesDisponibles.length > 0 && (
+          <button className="btn-danger" disabled={items.length === 0 || chargement} onClick={submit}>
+            {chargement ? "Un instant…" : "Confirmer le retour"}
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 
 // ================= REÇU (impression) =================
 function ReceiptModal({ sale, pharmacieEmail, onClose }) {
