@@ -16,6 +16,7 @@ import {
   orderBy,
   limit,
   increment,
+  arrayUnion,
 } from "firebase/firestore";
 import {
   getAuth,
@@ -370,6 +371,11 @@ export async function creerCommande(pharmacieId, data) {
   });
 }
 
+// La réception d'une commande met à jour le stock ET, si un numéro de
+// lot a été renseigné sur la ligne de commande (voir CommandeModal côté
+// App.jsx), ajoute une entrée de traçabilité dans meds/{medId}.lots —
+// numéro de lot, quantité reçue, péremption. Ça permet de retrouver
+// plus tard de quel lot/fournisseur provenait un article en stock.
 export async function receptionnerCommande(pharmacieId, commande) {
   const commandeRef = doc(db, "pharmacies", pharmacieId, "commandes", commande.id);
 
@@ -382,7 +388,21 @@ export async function receptionnerCommande(pharmacieId, commande) {
     medSnaps.forEach((snap, idx) => {
       const item = commande.items[idx];
       if (snap.exists()) {
-        tx.update(medRefs[idx], { quantity: snap.data().quantity + item.qty });
+        const med = snap.data();
+        const update = { quantity: (med.quantity || 0) + item.qty };
+        if (item.lotNumero && item.lotNumero.trim()) {
+          if (item.lotExpiry && (!med.expiry || item.lotExpiry < med.expiry)) {
+            update.expiry = item.lotExpiry;
+          }
+          update.lots = arrayUnion({
+            numero: item.lotNumero.trim(),
+            quantity: item.qty,
+            expiry: item.lotExpiry || null,
+            dateReception: new Date().toISOString().slice(0, 10),
+            fournisseur: commande.fournisseurName || "",
+          });
+        }
+        tx.update(medRefs[idx], update);
       }
     });
 
@@ -500,4 +520,66 @@ export async function creerRetour(pharmacieId, saleId, items, motif) {
   });
 
   return retourRef.id;
+}
+
+// ---------------------------------------------------------------
+// ORDONNANCES — historique par client. Un client peut avoir zéro,
+// une, ou plusieurs ordonnances au fil du temps.
+// pharmacies/{pharmacieId}/ordonnances/{ordonnanceId}
+// ---------------------------------------------------------------
+export function subscribeOrdonnances(pharmacieId, callback, max = 1000) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "ordonnances"),
+    orderBy("createdAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function addOrdonnance(pharmacieId, data) {
+  const ref = collection(db, "pharmacies", pharmacieId, "ordonnances");
+  await addDoc(ref, { ...data, createdAt: serverTimestamp() });
+}
+
+export async function updateOrdonnance(pharmacieId, ordonnanceId, data) {
+  const ref = doc(db, "pharmacies", pharmacieId, "ordonnances", ordonnanceId);
+  await updateDoc(ref, data);
+}
+
+export async function deleteOrdonnance(pharmacieId, ordonnanceId) {
+  const ref = doc(db, "pharmacies", pharmacieId, "ordonnances", ordonnanceId);
+  await deleteDoc(ref);
+}
+
+// ---------------------------------------------------------------
+// LOTS — traçabilité pharmaceutique. Chaque médicament porte un
+// tableau `lots` (numéro, quantité, péremption, date de réception),
+// alimenté automatiquement par receptionnerCommande quand un numéro
+// de lot est renseigné sur la commande, ou manuellement via cette
+// fonction. C'est un journal additif à but de traçabilité ; la
+// quantité et la péremption globales du médicament (utilisées par les
+// alertes et la vente) restent les champs `quantity`/`expiry` existants.
+// ---------------------------------------------------------------
+export async function addLotAMed(pharmacieId, medId, lot) {
+  const ref = doc(db, "pharmacies", pharmacieId, "meds", medId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error("Médicament introuvable.");
+    const med = snap.data();
+    const update = {
+      quantity: (med.quantity || 0) + lot.quantity,
+      lots: arrayUnion({
+        numero: lot.numero,
+        quantity: lot.quantity,
+        expiry: lot.expiry || null,
+        dateReception: new Date().toISOString().slice(0, 10),
+      }),
+    };
+    if (lot.expiry && (!med.expiry || lot.expiry < med.expiry)) {
+      update.expiry = lot.expiry;
+    }
+    tx.update(ref, update);
+  });
 }
