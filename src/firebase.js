@@ -446,3 +446,58 @@ export async function creerLienPaiementStripe(pharmacieId, plan) {
   const res = await appelable({ pharmacieId, plan });
   return res.data.paymentUrl;
 }
+
+// ---------------------------------------------------------------
+// RETOURS / REMBOURSEMENTS — un retour référence la vente d'origine
+// et remet en stock chaque article retourné, tout en déduisant son
+// montant du chiffre d'affaires total. Fait en UNE transaction pour
+// que stock, compteurs et journal du retour restent cohérents même
+// en cas d'écriture concurrente (deux employés sur deux appareils).
+// ---------------------------------------------------------------
+export function subscribeRetours(pharmacieId, callback, max = 500) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "retours"),
+    orderBy("createdAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+// items: [{ medId, name, price, qty }] — les articles et quantités
+// effectivement retournés (peut être une partie seulement de la vente).
+export async function creerRetour(pharmacieId, saleId, items, motif) {
+  const retourRef = doc(collection(db, "pharmacies", pharmacieId, "retours"));
+  const compteursRef = doc(db, "pharmacies", pharmacieId, "meta", "compteurs");
+  const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
+
+  await runTransaction(db, async (tx) => {
+    const medRefs = items.map((i) => doc(db, "pharmacies", pharmacieId, "meds", i.medId));
+    const medSnaps = await Promise.all(medRefs.map((ref) => tx.get(ref)));
+
+    medSnaps.forEach((snap, idx) => {
+      const item = items[idx];
+      if (snap.exists()) {
+        tx.update(medRefs[idx], { quantity: snap.data().quantity + item.qty });
+      }
+      // Si le médicament a été supprimé du stock entre-temps, on
+      // n'échoue pas tout le retour pour autant — le montant est quand
+      // même déduit du CA et le retour reste enregistré.
+    });
+
+    tx.set(retourRef, {
+      saleId,
+      items,
+      total,
+      motif: motif || "",
+      employeEmail: auth.currentUser ? auth.currentUser.email : null,
+      date: new Date().toISOString().slice(0, 10),
+      createdAt: serverTimestamp(),
+    });
+
+    tx.set(compteursRef, { totalRevenue: increment(-total) }, { merge: true });
+  });
+
+  return retourRef.id;
+}
