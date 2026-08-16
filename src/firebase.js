@@ -233,18 +233,30 @@ export async function finaliserVente(pharmacieId, cartItems, saleMeta) {
       tx.update(medRefs[idx], { quantity: snap.data().quantity - item.qty });
     });
 
+    // Coût total des marchandises vendues dans cette vente (pour la
+    // marge réelle) — lu depuis le champ coutAchat de chaque médicament
+    // AU MOMENT de la vente, et figé sur la ligne de vente : si le coût
+    // d'achat change plus tard, les ventes passées gardent leur marge
+    // d'origine plutôt que d'être recalculées après coup.
+    const coutTotal = cartItems.reduce((sum, item, idx) => {
+      const coutUnitaire = medSnaps[idx].data().coutAchat || 0;
+      return sum + coutUnitaire * item.qty;
+    }, 0);
+
     // 3) Enregistrer la vente — avec l'identité de l'employé qui l'a
     // faite, pour que le gérant puisse toujours savoir qui a vendu quoi.
     tx.set(saleRef, {
       ...saleMeta,
       employeEmail: auth.currentUser ? auth.currentUser.email : null,
       employeUid: auth.currentUser ? auth.currentUser.uid : null,
-      items: cartItems.map((i) => ({
+      items: cartItems.map((i, idx) => ({
         medId: i.medId,
         name: i.name,
         price: i.price,
         qty: i.qty,
+        coutAchat: medSnaps[idx].data().coutAchat || 0,
       })),
+      coutTotal,
       createdAt: serverTimestamp(),
     });
 
@@ -253,6 +265,7 @@ export async function finaliserVente(pharmacieId, cartItems, saleMeta) {
       compteursRef,
       {
         totalRevenue: increment(saleMeta.total),
+        totalCout: increment(coutTotal),
         totalSalesCount: increment(1),
       },
       { merge: true }
@@ -485,12 +498,16 @@ export function subscribeRetours(pharmacieId, callback, max = 500) {
   });
 }
 
-// items: [{ medId, name, price, qty }] — les articles et quantités
-// effectivement retournés (peut être une partie seulement de la vente).
+// items: [{ medId, name, price, qty, coutAchat }] — les articles et
+// quantités effectivement retournés (peut être une partie seulement de
+// la vente). coutAchat est optionnel : s'il est fourni (repris depuis
+// la ligne de vente d'origine), le coût des marchandises vendues est
+// corrigé d'autant, pour que la marge réelle reste exacte après retour.
 export async function creerRetour(pharmacieId, saleId, items, motif) {
   const retourRef = doc(collection(db, "pharmacies", pharmacieId, "retours"));
   const compteursRef = doc(db, "pharmacies", pharmacieId, "meta", "compteurs");
   const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
+  const coutTotal = items.reduce((sum, i) => sum + (i.coutAchat || 0) * i.qty, 0);
 
   await runTransaction(db, async (tx) => {
     const medRefs = items.map((i) => doc(db, "pharmacies", pharmacieId, "meds", i.medId));
@@ -510,13 +527,18 @@ export async function creerRetour(pharmacieId, saleId, items, motif) {
       saleId,
       items,
       total,
+      coutTotal,
       motif: motif || "",
       employeEmail: auth.currentUser ? auth.currentUser.email : null,
       date: new Date().toISOString().slice(0, 10),
       createdAt: serverTimestamp(),
     });
 
-    tx.set(compteursRef, { totalRevenue: increment(-total) }, { merge: true });
+    tx.set(
+      compteursRef,
+      { totalRevenue: increment(-total), totalCout: increment(-coutTotal) },
+      { merge: true }
+    );
   });
 
   return retourRef.id;
@@ -582,4 +604,40 @@ export async function addLotAMed(pharmacieId, medId, lot) {
     }
     tx.update(ref, update);
   });
+}
+
+// ---------------------------------------------------------------
+// DÉPENSES / CHARGES — journal des charges de la pharmacie (loyer,
+// salaires, électricité...), pour calculer le bénéfice net réel
+// (marge brute des ventes moins ces dépenses) dans l'onglet Comptabilité.
+// pharmacies/{pharmacieId}/depenses/{depenseId}
+// ---------------------------------------------------------------
+export function subscribeDepenses(pharmacieId, callback, max = 1000) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "depenses"),
+    orderBy("createdAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function addDepense(pharmacieId, data) {
+  const ref = collection(db, "pharmacies", pharmacieId, "depenses");
+  await addDoc(ref, {
+    ...data,
+    employeEmail: auth.currentUser ? auth.currentUser.email : null,
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function updateDepense(pharmacieId, depenseId, data) {
+  const ref = doc(db, "pharmacies", pharmacieId, "depenses", depenseId);
+  await updateDoc(ref, data);
+}
+
+export async function deleteDepense(pharmacieId, depenseId) {
+  const ref = doc(db, "pharmacies", pharmacieId, "depenses", depenseId);
+  await deleteDoc(ref);
 }
