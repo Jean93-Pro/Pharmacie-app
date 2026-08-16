@@ -16,13 +16,14 @@ import {
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
+import { Html5Qrcode } from "html5-qrcode";
 import {
   LayoutGrid, Package, ShoppingCart, Users, BarChart3, AlertTriangle,
   Plus, Trash2, Pencil, X, Search, ChevronRight, Clock, TrendingUp,
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
   Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
-  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, Printer
+  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, Printer, ScanLine
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -103,6 +104,15 @@ const seedMeds = () => ([
 function addDays(n) {
   const d = new Date();
   d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Calcule une date (YYYY-MM-DD) à partir d'une date de départ et d'un
+// nombre de jours à ajouter — utilisé pour la date de fin de
+// traitement d'une ordonnance (date de prescription + durée).
+function addDaysToDate(dateStr, n) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + Number(n || 0));
   return d.toISOString().slice(0, 10);
 }
 
@@ -339,6 +349,39 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       })
       .map((m) => ({ ...m, lastSale: lastSaleByMed[m.id] || null }));
   }, [meds, sales]);
+
+  // Suggestions de réapprovisionnement basées sur la VITESSE RÉELLE de
+  // vente (moyenne sur les 30 derniers jours), plutôt que sur le seul
+  // seuil fixe (minStock) — un produit qui se vend vite peut manquer
+  // avant d'atteindre son seuil, un produit lent peut y rester des mois
+  // sans urgence. On calcule, pour chaque médicament vendu au moins
+  // une fois récemment, le nombre de jours de stock restant au rythme
+  // actuel, et on suggère une quantité à commander pour tenir 30 jours.
+  const REAPPRO_FENETRE_JOURS = 30;
+  const REAPPRO_SEUIL_JOURS = 14;
+  const suggestionsReappro = useMemo(() => {
+    const venteParMed = {};
+    const limite = -REAPPRO_FENETRE_JOURS;
+    sales.forEach((s) => {
+      if (daysUntil(s.date) < limite) return; // hors fenêtre des 30 jours
+      s.items.forEach((i) => {
+        venteParMed[i.medId] = (venteParMed[i.medId] || 0) + i.qty;
+      });
+    });
+    return meds
+      .map((m) => {
+        const venteRecente = venteParMed[m.id] || 0;
+        const vitesseJour = venteRecente / REAPPRO_FENETRE_JOURS;
+        if (vitesseJour <= 0) return null;
+        const joursRestants = m.quantity / vitesseJour;
+        if (joursRestants > REAPPRO_SEUIL_JOURS) return null;
+        const quantiteSuggeree = Math.max(0, Math.ceil(vitesseJour * REAPPRO_FENETRE_JOURS - m.quantity));
+        return { ...m, vitesseJour, joursRestants: Math.round(joursRestants), quantiteSuggeree };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.joursRestants - b.joursRestants);
+  }, [meds, sales]);
+
   // Nombre total de références qui nécessitent une action (rupture,
   // stock bas, péremption proche, ou aucun mouvement) — affiché en
   // pastille dans le menu.
@@ -349,6 +392,17 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     noMovement.forEach((m) => ids.add(m.id));
     return ids.size;
   }, [lowStock, expiringSoon, noMovement]);
+
+  // Ordonnances "en cours" dont la durée de traitement renseignée
+  // touche à sa fin (7 jours ou moins, y compris déjà dépassée) —
+  // moment idéal pour relancer le client sur un renouvellement.
+  const renouvellementsBientot = useMemo(() => {
+    return ordonnances
+      .filter((o) => o.statut === "en_cours" && o.dureeJours && Number(o.dureeJours) > 0)
+      .map((o) => ({ ...o, dateFin: addDaysToDate(o.date, o.dureeJours), joursRestants: daysUntil(addDaysToDate(o.date, o.dureeJours)) }))
+      .filter((o) => o.joursRestants <= 7)
+      .sort((a, b) => a.joursRestants - b.joursRestants);
+  }, [ordonnances]);
 
   const todaySales = useMemo(() => {
     const t = todayISO();
@@ -431,6 +485,9 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
                     {alertCount}
                   </span>
                 )}
+                {n.id === "ordonnances" && !accesBloque && renouvellementsBientot.length > 0 && (
+                  <span className="nav-pill">{renouvellementsBientot.length}</span>
+                )}
               </button>
             );
           })}
@@ -465,7 +522,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         {tab === "alertes" && (
           <Alertes
             outOfStock={outOfStock} lowStock={lowStock} expiringSoon90={expiringSoon90}
-            noMovement={noMovement}
+            noMovement={noMovement} suggestionsReappro={suggestionsReappro}
           />
         )}
         {tab === "stock" && (
@@ -488,7 +545,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         )}
         {tab === "ordonnances" && (
           <Ordonnances
-            ordonnances={ordonnances} clients={clients}
+            ordonnances={ordonnances} clients={clients} renouvellementsBientot={renouvellementsBientot}
             pharmacieId={pharmacieId} notify={notify}
           />
         )}
@@ -533,7 +590,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
 // bas, péremptions à venir (fenêtre élargie à 90 jours pour anticiper
 // les commandes), et produits sans mouvement (60+ jours sans vente).
 // Chaque section peut être exportée en Excel séparément.
-function Alertes({ outOfStock, lowStock, expiringSoon90, noMovement }) {
+function Alertes({ outOfStock, lowStock, expiringSoon90, noMovement, suggestionsReappro }) {
   const lowStockOnly = lowStock.filter((m) => m.quantity > 0); // hors ruptures, déjà listées à part
   const expired = expiringSoon90.filter((m) => daysUntil(m.expiry) < 0);
   const expiringNotExpired = expiringSoon90.filter((m) => daysUntil(m.expiry) >= 0);
@@ -557,6 +614,11 @@ function Alertes({ outOfStock, lowStock, expiringSoon90, noMovement }) {
   const noMovementRows = noMovement.map((m) => ({
     "Médicament": m.name, "Quantité": m.quantity,
     "Dernière vente": m.lastSale || "Jamais vendu",
+    "Fournisseur": m.supplier || "",
+  }));
+  const reapproRows = suggestionsReappro.map((m) => ({
+    "Médicament": m.name, "Quantité actuelle": m.quantity,
+    "Jours de stock restant": m.joursRestants, "Quantité suggérée": m.quantiteSuggeree,
     "Fournisseur": m.supplier || "",
   }));
 
@@ -662,6 +724,33 @@ function Alertes({ outOfStock, lowStock, expiringSoon90, noMovement }) {
                   );
                 })}
               </ul>
+            </div>
+          )}
+
+          {suggestionsReappro.length > 0 && (
+            <div className="panel">
+              <div className="panel-head">
+                <h3><TrendingUp size={16} /> Réapprovisionnement suggéré, basé sur vos ventes ({suggestionsReappro.length})</h3>
+                <button className="btn-ghost" onClick={() => exportSection(reapproRows, "Réappro suggéré", `reappro-${todayISO()}.xlsx`)}>
+                  <Download size={14} /> Exporter
+                </button>
+              </div>
+              <ul className="mini-list">
+                {suggestionsReappro.map((m) => (
+                  <li key={m.id}>
+                    <span className="mini-name">{m.name}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="mini-meta">
+                        {m.joursRestants <= 0 ? "Stock épuisé imminent" : `${m.joursRestants} j de stock restant`}
+                      </span>
+                      <Badge tone={m.joursRestants <= 3 ? "danger" : "warn"}>Commander ~{m.quantiteSuggeree}</Badge>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="td-sub" style={{ marginTop: 10 }}>
+                Calculé sur votre vitesse de vente réelle des 30 derniers jours — quantité suggérée pour tenir encore 30 jours.
+              </p>
             </div>
           )}
 
@@ -973,6 +1062,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
       "Coût d'achat (FCFA)": m.coutAchat || 0,
       "Péremption": m.expiry,
       "Fournisseur": m.supplier || "",
+      "Code-barres": m.barcode || "",
     }));
     exportToExcel([{ name: "Stock", rows }], `stock-${todayISO()}.xlsx`);
   }
@@ -1005,6 +1095,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
           coutAchat: Number(row["Coût d'achat (FCFA)"]) || 0,
           expiry: parseExcelDate(row["Péremption"]),
           supplier: String(row["Fournisseur"] || "").trim(),
+          barcode: String(row["Code-barres"] || "").trim(),
         };
         await addMed(pharmacieId, med);
         count++;
@@ -1142,7 +1233,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
 function emptyMed() {
   return {
     name: "", category: CATEGORIES[0], unit: "", quantity: 0,
-    minStock: 5, price: 0, coutAchat: 0, expiry: todayISO(), supplier: "",
+    minStock: 5, price: 0, coutAchat: 0, expiry: todayISO(), supplier: "", barcode: "",
   };
 }
 
@@ -1195,6 +1286,9 @@ function MedModal({ mode, data, pharmacieId, notify, onClose, onSave }) {
         </Field>
         <Field label="Fournisseur">
           <input value={form.supplier} onChange={set("supplier")} placeholder="Ex: LABOREX" />
+        </Field>
+        <Field label="Code-barres (optionnel)">
+          <input value={form.barcode || ""} onChange={set("barcode")} placeholder="Scanné ou saisi manuellement" />
         </Field>
         <Field label="Quantité en stock">
           <input type="number" min="0" value={form.quantity} onChange={set("quantity")} />
@@ -1272,6 +1366,7 @@ function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, no
   const [modePaiement, setModePaiement] = useState("especes");
   const [montantEspeces, setMontantEspeces] = useState("");
   const [montantMobile, setMontantMobile] = useState("");
+  const [scannerOuvert, setScannerOuvert] = useState(false);
 
   const results = useMemo(() => {
     if (!query.trim()) return [];
@@ -1293,6 +1388,26 @@ function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, no
       return [...c, { medId: med.id, name: med.name, price: med.price, qty: 1, maxQty: med.quantity }];
     });
     setQuery("");
+  }
+
+  // Appelé quand la caméra détecte un code-barres : on cherche le
+  // médicament correspondant dans le stock et on l'ajoute directement
+  // au panier. Si aucun produit ne porte ce code, on pré-remplit la
+  // recherche manuelle avec le code lu, pour ne pas bloquer la vente.
+  function handleBarcodeDetecte(code) {
+    setScannerOuvert(false);
+    const med = meds.find((m) => m.barcode && m.barcode === code);
+    if (med) {
+      if (med.quantity <= 0) {
+        notify(`${med.name} est en rupture de stock.`, "danger");
+        return;
+      }
+      addToCart(med);
+      notify(`${med.name} ajouté au panier.`);
+    } else {
+      notify(`Aucun produit avec ce code-barres (${code}).`, "danger");
+      setQuery(code);
+    }
   }
 
   function changeQty(medId, delta) {
@@ -1401,7 +1516,12 @@ function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, no
       ) : (
         <div className="pos-grid">
           <div className="panel">
-            <div className="panel-head"><h3><PackageSearch size={16} /> Ajouter un produit</h3></div>
+            <div className="panel-head">
+              <h3><PackageSearch size={16} /> Ajouter un produit</h3>
+              <button className="btn-ghost" onClick={() => setScannerOuvert(true)}>
+                <ScanLine size={15} /> Scanner
+              </button>
+            </div>
             <div className="search-box search-box-lg">
               <Search size={15} />
               <input
@@ -1527,7 +1647,64 @@ function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, no
           }}
         />
       )}
+
+      {scannerOuvert && (
+        <ScannerModal onDetected={handleBarcodeDetecte} onClose={() => setScannerOuvert(false)} />
+      )}
     </div>
+  );
+}
+
+// Ouvre la caméra du téléphone/tablette (ou webcam sur PC) et lit un
+// code-barres en continu jusqu'à détection. La bibliothèque html5-qrcode
+// gère l'accès caméra et le décodage ; on se contente de démarrer/arrêter
+// proprement le flux au montage/démontage du composant.
+function ScannerModal({ onDetected, onClose }) {
+  const [erreur, setErreur] = useState("");
+  const regionId = "barcode-scanner-region";
+  const instanceRef = React.useRef(null);
+  const detecteRef = React.useRef(false);
+
+  useEffect(() => {
+    const html5Qrcode = new Html5Qrcode(regionId);
+    instanceRef.current = html5Qrcode;
+
+    html5Qrcode
+      .start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 140 } },
+        (decodedText) => {
+          if (detecteRef.current) return; // évite les doubles détections rafale
+          detecteRef.current = true;
+          onDetected(decodedText);
+        },
+        () => {} // échec de lecture sur une frame : ignoré, normal en continu
+      )
+      .catch(() => {
+        setErreur("Impossible d'accéder à la caméra. Vérifiez les autorisations de votre navigateur.");
+      });
+
+    return () => {
+      html5Qrcode.stop().then(() => html5Qrcode.clear()).catch(() => {});
+    };
+  }, []);
+
+  return (
+    <Modal title="Scanner un code-barres" onClose={onClose}>
+      {erreur ? (
+        <p className="confirm-text">{erreur}</p>
+      ) : (
+        <>
+          <div id={regionId} className="scanner-region" />
+          <p className="confirm-text" style={{ textAlign: "center", marginTop: 10 }}>
+            Pointez la caméra vers le code-barres du produit.
+          </p>
+        </>
+      )}
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Fermer</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1833,7 +2010,7 @@ function ClientModal({ data, onClose, onSave }) {
 // médicaments prescrits sont saisis en texte libre (nom + posologie),
 // pour couvrir aussi les produits non vendus par l'officine ou les
 // instructions qui n'ont pas leur place dans une fiche article.
-function Ordonnances({ ordonnances, clients, pharmacieId, notify }) {
+function Ordonnances({ ordonnances, clients, renouvellementsBientot, pharmacieId, notify }) {
   const [modal, setModal] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [filtre, setFiltre] = useState("Toutes");
@@ -1865,6 +2042,13 @@ function Ordonnances({ ordonnances, clients, pharmacieId, notify }) {
     await updateOrdonnance(pharmacieId, o.id, { statut: o.statut === "en_cours" ? "terminee" : "en_cours" });
   }
 
+  // Renouvellement en un clic : redémarre le compteur de durée à
+  // partir d'aujourd'hui, sans changer le reste de la prescription.
+  async function handleRenouveler(o) {
+    await updateOrdonnance(pharmacieId, o.id, { date: todayISO() });
+    notify(`Ordonnance de ${o.clientName} renouvelée.`);
+  }
+
   const enCours = ordonnances.filter((o) => o.statut === "en_cours").length;
 
   return (
@@ -1875,12 +2059,33 @@ function Ordonnances({ ordonnances, clients, pharmacieId, notify }) {
         action={
           <button
             className="btn-primary"
-            onClick={() => setModal({ id: null, clientName: "", medecin: "", date: todayISO(), medicaments: [{ name: "", posologie: "" }], statut: "en_cours", notes: "" })}
+            onClick={() => setModal({ id: null, clientName: "", medecin: "", date: todayISO(), dureeJours: "", medicaments: [{ name: "", posologie: "" }], statut: "en_cours", notes: "" })}
           >
             <Plus size={16} /> Nouvelle ordonnance
           </button>
         }
       />
+
+      {renouvellementsBientot.length > 0 && (
+        <div className="panel panel-alert">
+          <div className="panel-head">
+            <h3><History size={16} /> Renouvellements à prévoir ({renouvellementsBientot.length})</h3>
+          </div>
+          <ul className="mini-list">
+            {renouvellementsBientot.map((o) => (
+              <li key={o.id}>
+                <span className="mini-name">{o.clientName}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Badge tone={o.joursRestants < 0 ? "danger" : "warn"}>
+                    {o.joursRestants < 0 ? `Échu depuis ${-o.joursRestants} j` : o.joursRestants === 0 ? "Aujourd'hui" : `Dans ${o.joursRestants} j`}
+                  </Badge>
+                  <button className="btn-ghost" style={{ padding: "4px 10px" }} onClick={() => handleRenouveler(o)}>Renouveler</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="toolbar">
         <div className="search-box">
@@ -1905,6 +2110,9 @@ function Ordonnances({ ordonnances, clients, pharmacieId, notify }) {
                 <div>
                   <div className="mini-name">{o.clientName}</div>
                   <div className="td-sub">{o.medecin ? `Dr. ${o.medecin}` : "Médecin non renseigné"} · {o.date}</div>
+                  {o.dureeJours > 0 && (
+                    <div className="td-sub">Traitement {o.dureeJours} j — fin le {addDaysToDate(o.date, o.dureeJours)}</div>
+                  )}
                 </div>
               </div>
               <ul className="mini-list">
@@ -1987,6 +2195,13 @@ function OrdonnanceModal({ data, clients, onClose, onSave }) {
             <input type="date" value={form.date} onChange={set("date")} />
           </Field>
         </div>
+        <Field label="Durée du traitement (jours, optionnel)">
+          <input
+            type="number" min="0" value={form.dureeJours || ""}
+            onChange={(e) => setForm((f) => ({ ...f, dureeJours: e.target.value }))}
+            placeholder="Ex: 30 — pour être rappelé du renouvellement"
+          />
+        </Field>
 
         <Field label="Médicaments prescrits">
           <ul className="cart-list">
@@ -3250,6 +3465,9 @@ function Style() {
       .pay-mode-active { border-color: var(--teal); background: var(--sage); color: var(--teal-deep); }
       .pay-summary { font-size: 13px; font-weight: 700; text-align: center; padding: 8px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); }
       .pay-summary-warn { background: var(--rose-soft); color: var(--rose); }
+
+      .scanner-region { width: 100%; border-radius: 10px; overflow: hidden; background: #000; min-height: 220px; }
+      .scanner-region video { border-radius: 10px; }
       .cart-total { font-family: var(--font-display); color: var(--teal-deep); font-size: 18px; }
 
       .client-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
