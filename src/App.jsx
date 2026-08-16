@@ -2964,8 +2964,8 @@ function Style() {
       .search-box-lg { max-width: none; margin-bottom: 10px; }
       .select { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--panel); color: var(--ink); }
 
-      .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-sm); }
-      .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: var(--shadow-sm); }
+      .table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 13px; }
       .table th { text-align: left; padding: 11px 14px; background: var(--sage); color: var(--teal-deep); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
       .table td { padding: 11px 14px; border-top: 1px solid var(--line); vertical-align: top; }
       .table tbody tr { transition: background 0.12s ease; }
@@ -3090,17 +3090,47 @@ function Style() {
       .plan-features li { display: flex; align-items: center; gap: 7px; }
       .plan-features li svg { color: var(--ok); flex-shrink: 0; }
 
-      @media (max-width: 760px) {
-        .app-shell { flex-direction: column; }
-        .sidebar { width: 100%; flex-direction: row; align-items: center; padding: 12px; }
-        .nav { flex-direction: row; overflow-x: auto; }
-        .nav-item span { display: none; }
-        .sidebar-foot { display: none; }
-        .brand-sub { display: none; }
-        .stat-grid, .two-col, .pos-grid, .form-grid, .plans-grid { grid-template-columns: 1fr; }
+      /* ---------- Tablette (portrait/paysage, comptoir) ---------- */
+      @media (max-width: 1024px) {
+        .stat-grid { grid-template-columns: repeat(2, 1fr); }
+        .two-col, .pos-grid { grid-template-columns: 1fr; }
+        .cart-panel { position: static; }
+        .plans-grid { grid-template-columns: 1fr; }
+        .client-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
       }
 
-      .receipt-modal { width: 340px; }
+      /* ---------- Mobile / petit écran ---------- */
+      @media (max-width: 760px) {
+        .app-shell { flex-direction: column; border-radius: 0; }
+        .sidebar { width: 100%; flex-direction: row; align-items: center; padding: 10px 12px; gap: 8px; }
+        .brand { padding: 0; flex-shrink: 0; }
+        .nav { flex-direction: row; overflow-x: auto; gap: 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .nav::-webkit-scrollbar { display: none; }
+        .nav-item { flex-direction: column; gap: 3px; padding: 7px 10px; border-left: none; border-bottom: 2px solid transparent; flex-shrink: 0; }
+        .nav-active { border-left-color: transparent; border-bottom-color: var(--gold); }
+        .nav-item span { display: block; font-size: 9.5px; white-space: nowrap; }
+        .nav-pill { position: absolute; top: 2px; right: 2px; margin-left: 0; }
+        .sidebar-foot { display: none; }
+        .brand-sub { display: none; }
+        .stat-grid, .form-grid { grid-template-columns: 1fr; }
+
+        .main { padding: 16px; }
+        .page-head { flex-wrap: wrap; align-items: flex-start; }
+        .page-actions { flex-wrap: wrap; }
+        .toolbar { flex-wrap: wrap; }
+        .search-box { max-width: none; }
+        .method-toggle { flex-direction: column; }
+
+        /* Cibles tactiles plus généreuses au comptoir */
+        .icon-btn { width: 34px; height: 34px; }
+        .btn-primary, .btn-ghost, .btn-danger { padding: 11px 16px; }
+        .nav-item, .link-btn, .icon-btn, .btn-primary, .btn-ghost, .btn-danger { touch-action: manipulation; }
+
+        .modal-panel { width: 100%; max-width: 100vw; max-height: 92vh; border-radius: 14px 14px 0 0; position: fixed; bottom: 0; left: 0; }
+        .modal-wide { width: 100%; }
+      }
+
+      .receipt-modal { width: min(340px, 92vw); }
       .receipt-header { text-align: center; margin-bottom: 10px; }
       .receipt-brand { font-family: var(--font-display); font-weight: 700; font-size: 16px; color: var(--teal-deep); }
       .receipt-sub { font-size: 11px; color: var(--ink-soft); }
