@@ -402,7 +402,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       <Style />
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">℞</div>
+          <div className="brand-mark"><img src="/logo.png" alt="Officine" /></div>
           <div className="brand-text">
             <div className="brand-title">Officine</div>
             <div className="brand-sub">Gestion de pharmacie</div>
@@ -1601,7 +1601,7 @@ function ReceiptModal({ sale, pharmacieEmail, onClose }) {
         </div>
         <div className="modal-body receipt-print">
           <div className="receipt-header">
-            <div className="receipt-brand">℞ Officine</div>
+            <div className="receipt-brand"><img src="/logo.png" alt="Officine" className="receipt-logo" /> Officine</div>
             <div className="receipt-sub">{pharmacieEmail}</div>
           </div>
           <div className="receipt-meta">
@@ -2881,7 +2881,9 @@ function Style() {
         background: #f3f1e9; color: var(--teal-deep);
         display: flex; align-items: center; justify-content: center;
         font-size: 18px; font-weight: 700; font-family: var(--font-display);
+        overflow: hidden; flex-shrink: 0;
       }
+      .brand-mark img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
       .brand-title { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: 0.2px; }
       .brand-sub { font-size: 11px; opacity: 0.65; margin-top: 1px; }
 
@@ -3132,7 +3134,8 @@ function Style() {
 
       .receipt-modal { width: min(340px, 92vw); }
       .receipt-header { text-align: center; margin-bottom: 10px; }
-      .receipt-brand { font-family: var(--font-display); font-weight: 700; font-size: 16px; color: var(--teal-deep); }
+      .receipt-brand { font-family: var(--font-display); font-weight: 700; font-size: 16px; color: var(--teal-deep); display: flex; align-items: center; justify-content: center; gap: 6px; }
+      .receipt-logo { width: 20px; height: 20px; object-fit: contain; }
       .receipt-sub { font-size: 11px; color: var(--ink-soft); }
       .receipt-meta { font-size: 12px; color: var(--ink-soft); margin-bottom: 10px; display: flex; flex-direction: column; gap: 2px; }
       .receipt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
