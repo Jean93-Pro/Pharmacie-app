@@ -116,6 +116,7 @@ export async function inviterEmploye(pharmacieId, email, password, role) {
     await setDoc(doc(db, "pharmacies", pharmacieId, "membres", nouvelUid), {
       email, role, creeLe: new Date().toISOString(),
     });
+    logAudit(pharmacieId, "employe_invite", { email, role });
 
     return nouvelUid;
   } finally {
@@ -147,6 +148,7 @@ export async function retirerEmploye(pharmacieId, uid) {
     { pharmacieId, role: "retire", desactive: true },
     { merge: true }
   );
+  logAudit(pharmacieId, "employe_retire", { uid });
 }
 export function ecouterConnexion(callback) {
   return onAuthStateChanged(auth, callback);
@@ -168,16 +170,19 @@ export function subscribeMeds(pharmacieId, callback) {
 export async function addMed(pharmacieId, med) {
   const ref = collection(db, "pharmacies", pharmacieId, "meds");
   await addDoc(ref, med);
+  logAudit(pharmacieId, "medicament_ajoute", { nom: med.name });
 }
 
 export async function updateMed(pharmacieId, medId, data) {
   const ref = doc(db, "pharmacies", pharmacieId, "meds", medId);
   await updateDoc(ref, data);
+  logAudit(pharmacieId, "medicament_modifie", { medId, champs: Object.keys(data) });
 }
 
 export async function deleteMed(pharmacieId, medId) {
   const ref = doc(db, "pharmacies", pharmacieId, "meds", medId);
   await deleteDoc(ref);
+  logAudit(pharmacieId, "medicament_supprime", { medId });
 }
 
 // Insère les médicaments d'exemple UNE SEULE FOIS, seulement si la
@@ -541,6 +546,8 @@ export async function creerRetour(pharmacieId, saleId, items, motif) {
     );
   });
 
+  logAudit(pharmacieId, "retour_enregistre", { saleId, total, articles: items.length });
+
   return retourRef.id;
 }
 
@@ -630,6 +637,7 @@ export async function addDepense(pharmacieId, data) {
     employeEmail: auth.currentUser ? auth.currentUser.email : null,
     createdAt: serverTimestamp(),
   });
+  logAudit(pharmacieId, "depense_ajoutee", { categorie: data.categorie, montant: data.montant });
 }
 
 export async function updateDepense(pharmacieId, depenseId, data) {
@@ -640,4 +648,38 @@ export async function updateDepense(pharmacieId, depenseId, data) {
 export async function deleteDepense(pharmacieId, depenseId) {
   const ref = doc(db, "pharmacies", pharmacieId, "depenses", depenseId);
   await deleteDoc(ref);
+  logAudit(pharmacieId, "depense_supprimee", { depenseId });
+}
+
+// ---------------------------------------------------------------
+// JOURNAL D'AUDIT — trace qui a fait quoi et quand, pour les actions
+// sensibles (stock, ventes, argent, équipe). Écriture 'best effort' :
+// enveloppée dans un try/catch pour ne JAMAIS faire échouer l'action
+// principale si la journalisation elle-même rencontre un problème.
+// pharmacies/{pharmacieId}/audit/{entryId}
+// ---------------------------------------------------------------
+export async function logAudit(pharmacieId, action, details) {
+  try {
+    const ref = collection(db, "pharmacies", pharmacieId, "audit");
+    await addDoc(ref, {
+      action,
+      details: details || {},
+      employeEmail: auth.currentUser ? auth.currentUser.email : null,
+      createdAt: serverTimestamp(),
+    });
+  } catch (e) {
+    // Volontairement silencieux : un souci de journalisation ne doit
+    // jamais empêcher l'action métier elle-même de se terminer.
+  }
+}
+
+export function subscribeAudit(pharmacieId, callback, max = 300) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "audit"),
+    orderBy("createdAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
 }
