@@ -10,6 +10,7 @@ import {
   subscribeFournisseurs, addFournisseur, updateFournisseur, deleteFournisseur,
   subscribeCommandes, creerCommande, receptionnerCommande, annulerCommande,
   subscribeRetours, creerRetour,
+  subscribeDepenses, addDepense, updateDepense, deleteDepense,
   addLotAMed, subscribeOrdonnances, addOrdonnance, updateOrdonnance, deleteOrdonnance,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
@@ -20,7 +21,7 @@ import {
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
   Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
-  Stethoscope, Tag, HardDriveDownload
+  Stethoscope, Tag, HardDriveDownload, Wallet
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -236,6 +237,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [commandes, setCommandes] = useState([]);
   const [retours, setRetours] = useState([]);
   const [ordonnances, setOrdonnances] = useState([]);
+  const [depenses, setDepenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [abonnement, setAbonnement] = useState(null);
@@ -260,6 +262,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubCommandes = subscribeCommandes(pharmacieId, setCommandes);
     const unsubRetours = subscribeRetours(pharmacieId, setRetours);
     const unsubOrdonnances = subscribeOrdonnances(pharmacieId, setOrdonnances);
+    const unsubDepenses = subscribeDepenses(pharmacieId, setDepenses);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -288,6 +291,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubCommandes();
       unsubRetours();
       unsubOrdonnances();
+      unsubDepenses();
     };
   }, [pharmacieId]);
 
@@ -374,6 +378,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     { id: "fournisseurs", label: "Fournisseurs", icon: Truck },
     { id: "ordonnances", label: "Ordonnances", icon: Stethoscope },
     ...(role === "gerant" ? [{ id: "rapports", label: "Rapports", icon: BarChart3 }] : []),
+    ...(role === "gerant" ? [{ id: "comptabilite", label: "Comptabilité", icon: Wallet }] : []),
     ...(role === "gerant" ? [{ id: "equipe", label: "Équipe", icon: UserPlus }] : []),
     ...(role === "gerant" ? [{ id: "abonnement", label: "Abonnement", icon: CreditCard }] : []),
   ];
@@ -487,6 +492,12 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
             sales={sales} meds={meds} pharmacieId={pharmacieId}
             clients={clients} fournisseurs={fournisseurs} commandes={commandes}
             retours={retours} ordonnances={ordonnances}
+          />
+        )}
+        {tab === "comptabilite" && role === "gerant" && (
+          <Comptabilite
+            depenses={depenses} sales={sales} retours={retours}
+            pharmacieId={pharmacieId} notify={notify}
           />
         )}
         {tab === "equipe" && role === "gerant" && (
@@ -951,6 +962,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
       "Quantité": m.quantity,
       "Seuil d'alerte": m.minStock,
       "Prix unitaire (FCFA)": m.price,
+      "Coût d'achat (FCFA)": m.coutAchat || 0,
       "Péremption": m.expiry,
       "Fournisseur": m.supplier || "",
     }));
@@ -982,6 +994,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
           quantity: Number(row["Quantité"]) || 0,
           minStock: Number(row["Seuil d'alerte"]) || 5,
           price: Number(row["Prix unitaire (FCFA)"]) || 0,
+          coutAchat: Number(row["Coût d'achat (FCFA)"]) || 0,
           expiry: parseExcelDate(row["Péremption"]),
           supplier: String(row["Fournisseur"] || "").trim(),
         };
@@ -1121,7 +1134,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
 function emptyMed() {
   return {
     name: "", category: CATEGORIES[0], unit: "", quantity: 0,
-    minStock: 5, price: 0, expiry: todayISO(), supplier: "",
+    minStock: 5, price: 0, coutAchat: 0, expiry: todayISO(), supplier: "",
   };
 }
 
@@ -1183,6 +1196,9 @@ function MedModal({ mode, data, pharmacieId, notify, onClose, onSave }) {
         </Field>
         <Field label="Prix unitaire (FCFA)">
           <input type="number" min="0" value={form.price} onChange={set("price")} />
+        </Field>
+        <Field label="Coût d'achat (FCFA)">
+          <input type="number" min="0" value={form.coutAchat || 0} onChange={set("coutAchat")} />
         </Field>
         <Field label="Date de péremption">
           <input type="date" value={form.expiry} onChange={set("expiry")} />
@@ -1516,7 +1532,7 @@ function RetourModal({ sale, retours, onClose, onSave }) {
   }
 
   const items = articlesDisponibles
-    .map((i) => ({ medId: i.medId, name: i.name, price: i.price, qty: qtes[i.medId] || 0 }))
+    .map((i) => ({ medId: i.medId, name: i.name, price: i.price, coutAchat: i.coutAchat || 0, qty: qtes[i.medId] || 0 }))
     .filter((i) => i.qty > 0);
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
 
@@ -2447,6 +2463,187 @@ function traduireErreurInvite(code) {
   return map[code] || "Une erreur est survenue lors de l'invitation.";
 }
 
+
+// ================= COMPTABILITÉ =================
+// Vue d'ensemble financière : chiffre d'affaires, coût réel des
+// marchandises vendues (donc marge brute), dépenses/charges, et
+// bénéfice net = marge brute − dépenses. Les totaux CA/coût viennent
+// des compteurs globaux (exacts sur toute la durée de vie de la
+// pharmacie) ; les dépenses sont gérées ici (ajout/suppression).
+const CATEGORIES_DEPENSE = [
+  "Loyer", "Salaires", "Électricité/Eau", "Fournitures",
+  "Transport", "Marketing", "Impôts/Taxes", "Autre",
+];
+
+function Comptabilite({ depenses, sales, retours, pharmacieId, notify }) {
+  const [compteurs, setCompteurs] = useState({ totalRevenue: 0, totalCout: 0, totalSalesCount: 0 });
+  const [modal, setModal] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  useEffect(() => {
+    const unsub = subscribeCompteurs(pharmacieId, setCompteurs);
+    return () => unsub();
+  }, [pharmacieId]);
+
+  const totalRevenue = compteurs.totalRevenue || 0;
+  const totalCout = compteurs.totalCout || 0;
+  const margeBrute = totalRevenue - totalCout;
+  const depensesTotal = useMemo(() => depenses.reduce((sum, d) => sum + (d.montant || 0), 0), [depenses]);
+  const beneficeNet = margeBrute - depensesTotal;
+
+  const moisCourant = todayISO().slice(0, 7);
+  const depensesCeMois = useMemo(
+    () => depenses.filter((d) => (d.date || "").slice(0, 7) === moisCourant).reduce((sum, d) => sum + (d.montant || 0), 0),
+    [depenses, moisCourant]
+  );
+
+  async function handleSave(data) {
+    await addDepense(pharmacieId, data);
+    notify("Dépense enregistrée.");
+    setModal(false);
+  }
+
+  async function handleDelete(id) {
+    await deleteDepense(pharmacieId, id);
+    notify("Dépense supprimée.", "danger");
+    setConfirmDelete(null);
+  }
+
+  function handleExport() {
+    const rows = depenses.map((d) => ({
+      "Date": d.date, "Catégorie": d.categorie, "Description": d.description || "",
+      "Montant (FCFA)": d.montant,
+    }));
+    exportToExcel([{ name: "Dépenses", rows }], `depenses-${todayISO()}.xlsx`);
+  }
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Comptabilité"
+        sub="Marge réelle et bénéfice net de l'officine"
+        action={
+          <div className="page-actions">
+            <button className="btn-ghost" onClick={handleExport}>
+              <Download size={16} /> Exporter les dépenses
+            </button>
+            <button className="btn-primary" onClick={() => setModal(true)}>
+              <Plus size={16} /> Ajouter une dépense
+            </button>
+          </div>
+        }
+      />
+
+      <div className="stat-grid">
+        <StatCard icon={TrendingUp} label="Chiffre d'affaires total" value={fmtFCFA(totalRevenue)} tone="teal" />
+        <StatCard icon={Package} label="Coût des marchandises vendues" value={fmtFCFA(totalCout)} tone="ink" />
+        <StatCard icon={BarChart3} label="Marge brute" value={fmtFCFA(margeBrute)} tone="amber" />
+        <StatCard
+          icon={Wallet} label="Bénéfice net" value={fmtFCFA(beneficeNet)}
+          sub={`− ${fmtFCFA(depensesTotal)} de dépenses`}
+          tone={beneficeNet >= 0 ? "ok" : "rose"}
+        />
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <h3><Wallet size={16} /> Dépenses ({depenses.length})</h3>
+          <span className="td-sub">Ce mois-ci : {fmtFCFA(depensesCeMois)}</span>
+        </div>
+        {depenses.length === 0 ? (
+          <EmptyRow text="Aucune dépense enregistrée pour le moment." />
+        ) : (
+          <div className="table-wrap" style={{ marginTop: 4 }}>
+            <table className="table">
+              <thead>
+                <tr><th>Date</th><th>Catégorie</th><th>Description</th><th>Montant</th><th></th></tr>
+              </thead>
+              <tbody>
+                {depenses.map((d) => (
+                  <tr key={d.id}>
+                    <td>{d.date}</td>
+                    <td><Badge tone="neutral">{d.categorie}</Badge></td>
+                    <td className="td-sub">{d.description || "—"}</td>
+                    <td className="td-strong">{fmtFCFA(d.montant)}</td>
+                    <td className="td-actions">
+                      <button className="icon-btn icon-danger" onClick={() => setConfirmDelete(d)} aria-label="Supprimer">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <p className="td-sub">
+        La marge brute est calculée à partir du coût d'achat renseigné sur chaque médicament (fiche Stock) au moment de chaque vente.
+        Les retours ajustent automatiquement ce coût. Pensez à renseigner le coût d'achat de vos médicaments pour une marge exacte.
+      </p>
+
+      {modal && (
+        <DepenseModal onClose={() => setModal(false)} onSave={handleSave} />
+      )}
+
+      {confirmDelete && (
+        <Modal title="Supprimer cette dépense ?" onClose={() => setConfirmDelete(null)}>
+          <p className="confirm-text">
+            « {confirmDelete.categorie} — {fmtFCFA(confirmDelete.montant)} » sera retirée définitivement.
+          </p>
+          <div className="modal-actions">
+            <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>Annuler</button>
+            <button className="btn-danger" onClick={() => handleDelete(confirmDelete.id)}>Supprimer</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function DepenseModal({ onClose, onSave }) {
+  const [form, setForm] = useState({ categorie: CATEGORIES_DEPENSE[0], montant: 0, description: "", date: todayISO() });
+  const [chargement, setChargement] = useState(false);
+  const set = (k) => (e) => {
+    const v = e.target.type === "number" ? Number(e.target.value) : e.target.value;
+    setForm((f) => ({ ...f, [k]: v }));
+  };
+
+  async function submit() {
+    if (!form.montant || form.montant <= 0) return;
+    setChargement(true);
+    await onSave(form);
+    setChargement(false);
+  }
+
+  return (
+    <Modal title="Ajouter une dépense" onClose={onClose}>
+      <div className="form-grid form-grid-1">
+        <Field label="Catégorie">
+          <select className="select" value={form.categorie} onChange={set("categorie")}>
+            {CATEGORIES_DEPENSE.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="Montant (FCFA)">
+          <input type="number" min="0" value={form.montant} onChange={set("montant")} />
+        </Field>
+        <Field label="Date">
+          <input type="date" value={form.date} onChange={set("date")} />
+        </Field>
+        <Field label="Description (optionnel)">
+          <input value={form.description} onChange={set("description")} placeholder="Ex: Facture électricité août" />
+        </Field>
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button className="btn-primary" disabled={!form.montant || form.montant <= 0 || chargement} onClick={submit}>
+          {chargement ? "Un instant…" : "Ajouter"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
 
 function Rapports({ sales, meds, pharmacieId, clients, fournisseurs, commandes, retours, ordonnances }) {
   // CA total et nombre de ventes sur TOUTE la durée de vie de la
