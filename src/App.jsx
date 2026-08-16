@@ -2830,28 +2830,28 @@ function Style() {
       @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Mono:wght@500&display=swap');
 
       .app-shell {
-        --ink: #1c2b24;
-        --ink-soft: #4b5c53;
-        --paper: #f6f4ee;
+        --ink: #16241c;
+        --ink-soft: #56695d;
+        --paper: #f8f4ea;
         --panel: #ffffff;
-        --line: #e2e2d8;
-        --teal: #1f5148;
-        --teal-deep: #123a33;
-        --sage: #e4ece4;
-        --amber: #b8722a;
-        --amber-soft: #f4e3cd;
-        --rose: #a5433a;
-        --rose-soft: #f3ddd8;
-        --ok-soft: #e1ede2;
-        --ok: #2f6b3f;
-        --gold: #a9863a;
-        --gold-soft: #f0e6cd;
+        --line: #e7e0cf;
+        --teal: #0e5c48;
+        --teal-deep: #0a3a2e;
+        --sage: #e1ede3;
+        --amber: #ad7a2e;
+        --amber-soft: #f3e6c9;
+        --rose: #8f3a3a;
+        --rose-soft: #f0dad7;
+        --ok-soft: #dfeee1;
+        --ok: #2c6b3d;
+        --gold: #ab8636;
+        --gold-soft: #f1e5c2;
         --font-display: 'Fraunces', Georgia, serif;
         --font-body: 'IBM Plex Sans', 'Segoe UI', Arial, sans-serif;
         --font-mono: 'IBM Plex Mono', 'Courier New', monospace;
-        --shadow-sm: 0 1px 2px rgba(18, 58, 51, 0.05), 0 1px 1px rgba(18, 58, 51, 0.04);
-        --shadow-md: 0 6px 16px rgba(18, 58, 51, 0.08), 0 2px 6px rgba(18, 58, 51, 0.05);
-        --shadow-lg: 0 16px 40px rgba(18, 58, 51, 0.14), 0 4px 12px rgba(18, 58, 51, 0.06);
+        --shadow-sm: 0 1px 2px rgba(10, 58, 46, 0.06), 0 1px 1px rgba(10, 58, 46, 0.04);
+        --shadow-md: 0 8px 20px rgba(10, 58, 46, 0.10), 0 2px 6px rgba(10, 58, 46, 0.06);
+        --shadow-lg: 0 20px 48px rgba(10, 58, 46, 0.16), 0 6px 14px rgba(10, 58, 46, 0.08);
         font-family: var(--font-body);
         display: flex;
         min-height: 640px;
@@ -2869,7 +2869,7 @@ function Style() {
       .sidebar {
         width: 220px;
         flex-shrink: 0;
-        background: linear-gradient(175deg, var(--teal-deep) 0%, #0d2a25 100%);
+        background: linear-gradient(175deg, var(--teal-deep) 0%, #06201a 100%);
         color: #f3f1e9;
         display: flex;
         flex-direction: column;
@@ -2996,7 +2996,7 @@ function Style() {
       .btn-alert { border-color: var(--rose); color: var(--rose); }
       .btn-alert:hover { background: var(--rose-soft); }
       .btn-danger { background: var(--rose); color: white; border: none; padding: 9px 15px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s ease; }
-      .btn-danger:hover { background: #8a362e; }
+      .btn-danger:hover { background: #6f2c2c; }
       .btn-full { width: 100%; justify-content: center; margin-top: 10px; }
 
       .modal-backdrop {
