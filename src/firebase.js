@@ -1,6 +1,8 @@
 import { initializeApp, deleteApp } from "firebase/app";
 import {
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   doc,
   setDoc,
   getDoc,
@@ -38,7 +40,20 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+// Mode hors-ligne : Firestore garde en cache local (IndexedDB) tout ce
+// qui a déjà été lu, et met en FILE D'ATTENTE les écritures simples
+// (ajout/modif client, fournisseur, dépense...) faites sans réseau —
+// elles partent automatiquement dès que la connexion revient.
+// persistentMultipleTabManager permet d'avoir l'appli ouverte dans
+// plusieurs onglets sans conflit sur le cache local.
+// LIMITE IMPORTANTE : les opérations qui utilisent runTransaction
+// (finaliserVente, receptionnerCommande, creerRetour, addLot...) ont
+// BESOIN d'une connexion active pour vérifier le stock en toute
+// sécurité — elles restent bloquées hors-ligne, volontairement, pour
+// ne jamais risquer de survendre un article.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 export const auth = getAuth(app);
 export const functions = getFunctions(app);
 
@@ -152,6 +167,24 @@ export async function retirerEmploye(pharmacieId, uid) {
 }
 export function ecouterConnexion(callback) {
   return onAuthStateChanged(auth, callback);
+}
+
+// Suit l'état de connexion réseau du navigateur (pas celui de
+// Firestore lui-même) — utilisé pour afficher un indicateur et
+// bloquer les actions qui ont besoin d'une transaction sécurisée
+// (vente, réception de commande, retour) tant qu'il n'y a pas de
+// réseau. Appelle callback immédiatement avec l'état actuel, puis à
+// chaque changement.
+export function ecouterReseau(callback) {
+  callback(navigator.onLine);
+  const onOnline = () => callback(true);
+  const onOffline = () => callback(false);
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
+  return () => {
+    window.removeEventListener("online", onOnline);
+    window.removeEventListener("offline", onOffline);
+  };
 }
 
 // ---------------------------------------------------------------
