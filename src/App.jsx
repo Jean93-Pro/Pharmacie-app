@@ -3,7 +3,7 @@ import {
   seedMedsIfEmpty, subscribeMeds, addMed, updateMed, deleteMed,
   subscribeSales, finaliserVente,
   subscribeClients, addClient, updateClient, deleteClient,
-  ecouterConnexion, deconnecter,
+  ecouterConnexion, deconnecter, ecouterReseau,
   getAcces, reparerAccesExistant, inviterEmploye, subscribeMembres, retirerEmploye,
   subscribeCompteurs,
   subscribeAbonnement, demarrerEssaiGratuit, creerLienPaiement, creerLienPaiementStripe,
@@ -23,7 +23,7 @@ import {
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
   Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
-  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, Printer, ScanLine
+  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -250,6 +250,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [ordonnances, setOrdonnances] = useState([]);
   const [depenses, setDepenses] = useState([]);
   const [audit, setAudit] = useState([]);
+  const [enLigne, setEnLigne] = useState(true);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const [abonnement, setAbonnement] = useState(null);
@@ -308,6 +309,14 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubAudit();
     };
   }, [pharmacieId]);
+
+  // Suivi de la connexion réseau — indépendant du chargement des
+  // données de la pharmacie, pour rester à jour même si l'appareil
+  // passe hors-ligne juste après le chargement initial.
+  useEffect(() => {
+    const unsubReseau = ecouterReseau(setEnLigne);
+    return () => unsubReseau();
+  }, []);
 
   const notify = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone, id: uid() });
@@ -493,6 +502,10 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           })}
         </nav>
         <div className="sidebar-foot">
+          <div className={`network-status ${enLigne ? "network-online" : "network-offline"}`}>
+            {enLigne ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {enLigne ? "En ligne" : "Hors ligne — synchronisation en attente"}
+          </div>
           <div className="foot-line">{pharmacieEmail}</div>
           <div className="foot-line foot-dim">{role === "gerant" ? "Gérant" : "Caissier"} · Données synchronisées</div>
           <button className="logout-btn" onClick={() => deconnecter()}>Se déconnecter</button>
@@ -500,6 +513,12 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       </aside>
 
       <main className="main">
+        {!enLigne && (
+          <div className="abo-banner offline-banner">
+            <WifiOff size={15} />
+            Hors ligne — consultation possible, mais ventes, réceptions de commande et retours sont bloqués tant que le réseau n'est pas revenu.
+          </div>
+        )}
         {essaiBientotFini && !accesBloque && (
           <div className="abo-banner">
             <Clock size={15} />
@@ -526,11 +545,11 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           />
         )}
         {tab === "stock" && (
-          <Stock meds={meds} pharmacieId={pharmacieId} notify={notify} lowStock={lowStock} outOfStock={outOfStock} />
+          <Stock meds={meds} pharmacieId={pharmacieId} notify={notify} lowStock={lowStock} outOfStock={outOfStock} enLigne={enLigne} />
         )}
         {tab === "ventes" && (
           <Ventes
-            meds={meds} sales={sales} clients={clients} retours={retours}
+            meds={meds} sales={sales} clients={clients} retours={retours} enLigne={enLigne}
             pharmacieId={pharmacieId} pharmacieEmail={pharmacieEmail} notify={notify}
           />
         )}
@@ -539,7 +558,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         )}
         {tab === "fournisseurs" && (
           <Fournisseurs
-            fournisseurs={fournisseurs} commandes={commandes} meds={meds}
+            fournisseurs={fournisseurs} commandes={commandes} meds={meds} enLigne={enLigne}
             pharmacieId={pharmacieId} notify={notify}
           />
         )}
@@ -1000,7 +1019,7 @@ function PageHead({ title, sub, action }) {
 }
 
 // ================= STOCK =================
-function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
+function Stock({ meds, pharmacieId, notify, lowStock, outOfStock, enLigne }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("Tous");
   const [modal, setModal] = useState(null); // { mode: 'new'|'edit', data }
@@ -1210,6 +1229,7 @@ function Stock({ meds, pharmacieId, notify, lowStock, outOfStock }) {
           data={modal.data}
           pharmacieId={pharmacieId}
           notify={notify}
+          enLigne={enLigne}
           onClose={() => setModal(null)}
           onSave={handleSave}
         />
@@ -1237,7 +1257,7 @@ function emptyMed() {
   };
 }
 
-function MedModal({ mode, data, pharmacieId, notify, onClose, onSave }) {
+function MedModal({ mode, data, pharmacieId, notify, enLigne, onClose, onSave }) {
   const [form, setForm] = useState(data);
   const [nouveauLot, setNouveauLot] = useState({ numero: "", quantity: "", expiry: "" });
   const [ajoutLotEnCours, setAjoutLotEnCours] = useState(false);
@@ -1331,11 +1351,14 @@ function MedModal({ mode, data, pharmacieId, notify, onClose, onSave }) {
             <input placeholder="N° de lot" value={nouveauLot.numero} onChange={(e) => setNouveauLot((l) => ({ ...l, numero: e.target.value }))} />
             <input type="number" min="1" placeholder="Quantité" value={nouveauLot.quantity} onChange={(e) => setNouveauLot((l) => ({ ...l, quantity: e.target.value }))} />
             <input type="date" value={nouveauLot.expiry} onChange={(e) => setNouveauLot((l) => ({ ...l, expiry: e.target.value }))} />
-            <button className="btn-ghost" disabled={ajoutLotEnCours} onClick={handleAjoutLot}>
+            <button className="btn-ghost" disabled={ajoutLotEnCours || !enLigne} onClick={handleAjoutLot} title={enLigne ? undefined : "Connexion requise pour ajouter un lot"}>
               <Plus size={14} /> Ajouter ce lot
             </button>
           </div>
-          <p className="td-sub" style={{ marginTop: 4 }}>Ajouter un lot ici augmente aussi la quantité en stock ci-dessus.</p>
+          <p className="td-sub" style={{ marginTop: 4 }}>
+            Ajouter un lot ici augmente aussi la quantité en stock ci-dessus.
+            {!enLigne && " Connexion requise pour cette action."}
+          </p>
         </div>
       )}
 
@@ -1354,7 +1377,7 @@ function MedModal({ mode, data, pharmacieId, notify, onClose, onSave }) {
 }
 
 // ================= VENTES (POS) =================
-function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, notify }) {
+function Ventes({ meds, sales, clients, retours, enLigne, pharmacieId, pharmacieEmail, notify }) {
   const [cart, setCart] = useState([]); // {medId, name, price, qty, maxQty}
   const [query, setQuery] = useState("");
   const [clientName, setClientName] = useState("");
@@ -1512,7 +1535,7 @@ function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, no
       />
 
       {history ? (
-        <SalesHistory sales={sales} retours={retours} onPrint={setReceiptSale} onRetour={setRetourSale} />
+        <SalesHistory sales={sales} retours={retours} enLigne={enLigne} onPrint={setReceiptSale} onRetour={setRetourSale} />
       ) : (
         <div className="pos-grid">
           <div className="panel">
@@ -1620,7 +1643,14 @@ function Ventes({ meds, sales, clients, retours, pharmacieId, pharmacieEmail, no
               </div>
             )}
 
-            <button className="btn-primary btn-full" disabled={cart.length === 0 || paiementInsuffisant} onClick={finalizeSale}>
+            {!enLigne && cart.length > 0 && (
+              <div className="pay-summary pay-summary-warn">
+                <WifiOff size={13} style={{ marginRight: 4 }} />
+                Connexion requise pour encaisser (vérification du stock en temps réel).
+              </div>
+            )}
+
+            <button className="btn-primary btn-full" disabled={cart.length === 0 || paiementInsuffisant || !enLigne} onClick={finalizeSale}>
               Encaisser la vente
             </button>
           </div>
@@ -1708,7 +1738,7 @@ function ScannerModal({ onDetected, onClose }) {
   );
 }
 
-function SalesHistory({ sales, retours, onPrint, onRetour }) {
+function SalesHistory({ sales, retours, enLigne, onPrint, onRetour }) {
   if (sales.length === 0) return <EmptyRow text="Aucune vente enregistrée pour le moment." />;
 
   function retourneDeja(saleId) {
@@ -1736,7 +1766,11 @@ function SalesHistory({ sales, retours, onPrint, onRetour }) {
                   {dejaRetourne > 0 && <div className="td-sub">− {fmtFCFA(dejaRetourne)} retourné</div>}
                 </td>
                 <td className="td-actions">
-                  <button className="icon-btn" onClick={() => onRetour(s)} aria-label="Enregistrer un retour" title="Enregistrer un retour">
+                  <button
+                    className="icon-btn" onClick={() => onRetour(s)} disabled={!enLigne}
+                    aria-label="Enregistrer un retour"
+                    title={enLigne ? "Enregistrer un retour" : "Connexion requise pour enregistrer un retour"}
+                  >
                     <RotateCcw size={14} />
                   </button>
                   <button className="icon-btn" onClick={() => onPrint(s)} aria-label="Imprimer le reçu">
@@ -2252,7 +2286,7 @@ function OrdonnanceModal({ data, clients, onClose, onSave }) {
 // l'historique des commandes passées auprès d'eux. La réception d'une
 // commande incrémente automatiquement le stock des articles concernés
 // (voir receptionnerCommande dans firebase.js).
-function Fournisseurs({ fournisseurs, commandes, meds, pharmacieId, notify }) {
+function Fournisseurs({ fournisseurs, commandes, meds, enLigne, pharmacieId, notify }) {
   const [vue, setVue] = useState("fournisseurs"); // "fournisseurs" | "commandes"
   const [modal, setModal] = useState(null); // { id, ... } fiche fournisseur
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -2398,7 +2432,11 @@ function Fournisseurs({ fournisseurs, commandes, meds, pharmacieId, notify }) {
                   <td className="td-actions">
                     {c.statut === "en_attente" && (
                       <>
-                        <button className="icon-btn" onClick={() => setConfirmReception(c)} aria-label="Marquer reçue" title="Marquer reçue (met à jour le stock)">
+                        <button
+                          className="icon-btn" onClick={() => setConfirmReception(c)} disabled={!enLigne}
+                          aria-label="Marquer reçue"
+                          title={enLigne ? "Marquer reçue (met à jour le stock)" : "Connexion requise pour réceptionner"}
+                        >
                           <PackageCheck size={15} />
                         </button>
                         <button className="icon-btn icon-danger" onClick={() => handleAnnuler(c.id)} aria-label="Annuler" title="Annuler la commande">
@@ -3500,6 +3538,14 @@ function Style() {
         padding: 8px 14px; border-radius: 8px; margin-bottom: -6px;
       }
       .abo-banner .link-btn { margin-left: auto; color: var(--amber); }
+      .offline-banner { background: var(--rose-soft); color: var(--rose); border-color: var(--rose); }
+
+      .network-status {
+        display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600;
+        padding: 5px 8px; border-radius: 6px; margin-bottom: 10px; color: #cfd9d1;
+      }
+      .network-online { background: rgba(255,255,255,0.06); }
+      .network-offline { background: rgba(143,58,58,0.25); color: #f0dad7; }
 
       .method-toggle { display: flex; gap: 8px; }
       .method-btn {
