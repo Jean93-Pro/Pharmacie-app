@@ -308,6 +308,27 @@ export async function finaliserVente(pharmacieId, cartItems, saleMeta) {
       },
       { merge: true }
     );
+
+    // 5) Si la vente est (en partie) prise en charge par une mutuelle,
+    // on enregistre un "bon" séparé à réclamer plus tard — jamais en
+    // modifiant la vente elle-même (le journal des ventes est immuable,
+    // voir firestore.rules), mais dans sa propre collection, mutable,
+    // pour pouvoir suivre son statut de remboursement dans le temps.
+    if (saleMeta.mutuelle && saleMeta.mutuelle.montantCouvert > 0) {
+      const bonRef = doc(collection(db, "pharmacies", pharmacieId, "bons"));
+      tx.set(bonRef, {
+        saleId: saleRef.id,
+        client: saleMeta.client,
+        mutuelleNom: saleMeta.mutuelle.nom,
+        mutuelleNumero: saleMeta.mutuelle.numero || "",
+        numeroBon: saleMeta.mutuelle.numeroBon || "",
+        taux: saleMeta.mutuelle.taux,
+        montant: saleMeta.mutuelle.montantCouvert,
+        date: saleMeta.date,
+        statut: "en_attente",
+        createdAt: serverTimestamp(),
+      });
+    }
   });
 
   return saleRef.id;
@@ -714,5 +735,32 @@ export function subscribeAudit(pharmacieId, callback, max = 300) {
   );
   return onSnapshot(ref, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+// ---------------------------------------------------------------
+// BONS MUTUELLE — suivi des montants à réclamer aux mutuelles/
+// assurances santé pour les ventes prises en charge en tiers payant.
+// Créés automatiquement par finaliserVente (ci-dessus) quand une vente
+// mentionne une mutuelle ; leur statut ("en_attente" / "rembourse")
+// se met à jour ici, indépendamment de la vente d'origine (immuable).
+// pharmacies/{pharmacieId}/bons/{bonId}
+// ---------------------------------------------------------------
+export function subscribeBons(pharmacieId, callback, max = 1000) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "bons"),
+    orderBy("createdAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function marquerBonRembourse(pharmacieId, bonId) {
+  const ref = doc(db, "pharmacies", pharmacieId, "bons", bonId);
+  await updateDoc(ref, {
+    statut: "rembourse",
+    dateRemboursement: new Date().toISOString().slice(0, 10),
   });
 }
