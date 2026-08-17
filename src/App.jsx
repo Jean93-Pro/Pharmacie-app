@@ -12,6 +12,7 @@ import {
   subscribeRetours, creerRetour,
   subscribeDepenses, addDepense, updateDepense, deleteDepense,
   subscribeAudit,
+  subscribeBons, marquerBonRembourse,
   addLotAMed, subscribeOrdonnances, addOrdonnance, updateOrdonnance, deleteOrdonnance,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
@@ -23,7 +24,7 @@ import {
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
   Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
-  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine
+  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine, HeartHandshake
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -250,6 +251,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [ordonnances, setOrdonnances] = useState([]);
   const [depenses, setDepenses] = useState([]);
   const [audit, setAudit] = useState([]);
+  const [bons, setBons] = useState([]);
   const [enLigne, setEnLigne] = useState(true);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
@@ -277,6 +279,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubOrdonnances = subscribeOrdonnances(pharmacieId, setOrdonnances);
     const unsubDepenses = subscribeDepenses(pharmacieId, setDepenses);
     const unsubAudit = subscribeAudit(pharmacieId, setAudit);
+    const unsubBons = subscribeBons(pharmacieId, setBons);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -307,6 +310,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubOrdonnances();
       unsubDepenses();
       unsubAudit();
+      unsubBons();
     };
   }, [pharmacieId]);
 
@@ -447,6 +451,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     ...(role === "gerant" ? [{ id: "rapports", label: "Rapports", icon: BarChart3 }] : []),
     ...(role === "gerant" ? [{ id: "comptabilite", label: "Comptabilité", icon: Wallet }] : []),
     ...(role === "gerant" ? [{ id: "journal", label: "Journal", icon: History }] : []),
+    ...(role === "gerant" ? [{ id: "mutuelles", label: "Mutuelles", icon: HeartHandshake }] : []),
     ...(role === "gerant" ? [{ id: "equipe", label: "Équipe", icon: UserPlus }] : []),
     ...(role === "gerant" ? [{ id: "abonnement", label: "Abonnement", icon: CreditCard }] : []),
   ];
@@ -583,6 +588,9 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         )}
         {tab === "journal" && role === "gerant" && (
           <Journal audit={audit} />
+        )}
+        {tab === "mutuelles" && role === "gerant" && (
+          <Mutuelles bons={bons} pharmacieId={pharmacieId} notify={notify} />
         )}
         {tab === "equipe" && role === "gerant" && (
           <Equipe pharmacieId={pharmacieId} notify={notify} />
@@ -1384,12 +1392,21 @@ function Ventes({ meds, sales, clients, retours, enLigne, pharmacieId, pharmacie
   const [history, setHistory] = useState(false);
   const [receiptSale, setReceiptSale] = useState(null);
   const [retourSale, setRetourSale] = useState(null);
-  // Paiement : "especes" | "mobile" | "mixte". Pour "especes" et
-  // "mixte", on calcule la monnaie à rendre à partir du montant reçu.
+  // Paiement : "especes" | "mobile" | "mixte" | "mutuelle". Pour
+  // "especes"/"mixte", on calcule la monnaie à rendre à partir du
+  // montant reçu ; pour "mutuelle", une partie du total est couverte
+  // par l'assurance et seul le reste est encaissé auprès du client.
   const [modePaiement, setModePaiement] = useState("especes");
   const [montantEspeces, setMontantEspeces] = useState("");
   const [montantMobile, setMontantMobile] = useState("");
+  const [tauxMutuelle, setTauxMutuelle] = useState("");
+  const [numeroBon, setNumeroBon] = useState("");
   const [scannerOuvert, setScannerOuvert] = useState(false);
+
+  const clientSelectionne = useMemo(
+    () => clients.find((c) => c.name === clientName.trim()),
+    [clients, clientName]
+  );
 
   const results = useMemo(() => {
     if (!query.trim()) return [];
@@ -1454,16 +1471,23 @@ function Ventes({ meds, sales, clients, retours, enLigne, pharmacieId, pharmacie
   // Montant effectivement reçu selon le mode de paiement, et monnaie à
   // rendre (jamais négative — on borne à 0 tant que le montant reçu
   // n'atteint pas le total, pour ne pas afficher une monnaie absurde).
+  // En mode "mutuelle", seule la part NON couverte par l'assurance
+  // (resteAPayer) doit être encaissée auprès du client.
   const espV = Number(montantEspeces) || 0;
   const mobV = Number(montantMobile) || 0;
+  const tauxV = Math.min(100, Math.max(0, Number(tauxMutuelle) || 0));
+  const montantCouvert = modePaiement === "mutuelle" ? Math.round(total * (tauxV / 100)) : 0;
+  const resteAPayer = total - montantCouvert;
   const montantRecu = modePaiement === "especes" ? espV : modePaiement === "mobile" ? mobV : espV + mobV;
-  const monnaie = Math.max(0, montantRecu - total);
-  const paiementInsuffisant = cart.length > 0 && montantRecu < total;
+  const monnaie = Math.max(0, montantRecu - resteAPayer);
+  const paiementInsuffisant = cart.length > 0 && montantRecu < resteAPayer;
 
   function resetPaiement() {
     setModePaiement("especes");
     setMontantEspeces("");
     setMontantMobile("");
+    setTauxMutuelle("");
+    setNumeroBon("");
   }
 
   function handleExportSales() {
@@ -1488,6 +1512,15 @@ function Ventes({ meds, sales, clients, retours, enLigne, pharmacieId, pharmacie
       montantEspeces: modePaiement === "mobile" ? 0 : espV,
       montantMobile: modePaiement === "especes" ? 0 : mobV,
       monnaie,
+      ...(modePaiement === "mutuelle" && {
+        mutuelle: {
+          nom: clientSelectionne?.mutuelleNom || "",
+          numero: clientSelectionne?.mutuelleNumero || "",
+          taux: tauxV,
+          montantCouvert,
+          numeroBon: numeroBon.trim(),
+        },
+      }),
     };
     const items = cart.map((i) => ({ medId: i.medId, name: i.name, price: i.price, qty: i.qty }));
     // Articles dont la vente vide complètement le stock (qty vendue ==
@@ -1620,14 +1653,44 @@ function Ventes({ meds, sales, clients, retours, enLigne, pharmacieId, pharmacie
                   <button type="button" className={`pay-mode-btn ${modePaiement === "mixte" ? "pay-mode-active" : ""}`} onClick={() => setModePaiement("mixte")}>
                     <Wallet size={14} /> Mixte
                   </button>
+                  <button
+                    type="button" className={`pay-mode-btn ${modePaiement === "mutuelle" ? "pay-mode-active" : ""}`}
+                    onClick={() => { setModePaiement("mutuelle"); if (clientSelectionne?.mutuelleTaux) setTauxMutuelle(String(clientSelectionne.mutuelleTaux)); }}
+                  >
+                    <HeartHandshake size={14} /> Mutuelle
+                  </button>
                 </div>
 
-                {modePaiement !== "mobile" && (
-                  <Field label={modePaiement === "mixte" ? "Montant en espèces reçu" : "Montant reçu"}>
+                {modePaiement === "mutuelle" && (
+                  <>
+                    {!clientSelectionne?.mutuelleNom && (
+                      <p className="td-sub" style={{ margin: 0 }}>
+                        Astuce : sélectionnez un client ayant une mutuelle enregistrée pour préremplir le taux.
+                      </p>
+                    )}
+                    {clientSelectionne?.mutuelleNom && (
+                      <p className="td-sub" style={{ margin: 0 }}>{clientSelectionne.mutuelleNom} — carte {clientSelectionne.mutuelleNumero || "n/a"}</p>
+                    )}
+                    <Field label="Taux de couverture (%)">
+                      <input type="number" min="0" max="100" value={tauxMutuelle} onChange={(e) => setTauxMutuelle(e.target.value)} placeholder="Ex: 70" />
+                    </Field>
+                    <Field label="Numéro de bon (optionnel)">
+                      <input value={numeroBon} onChange={(e) => setNumeroBon(e.target.value)} placeholder="Référence du bon de prise en charge" />
+                    </Field>
+                    {tauxV > 0 && (
+                      <p className="td-sub" style={{ margin: 0 }}>
+                        Mutuelle : {fmtFCFA(montantCouvert)} · Reste à payer par le client : {fmtFCFA(resteAPayer)}
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {(modePaiement === "especes" || modePaiement === "mixte" || modePaiement === "mutuelle") && (
+                  <Field label={modePaiement === "mixte" ? "Montant en espèces reçu" : modePaiement === "mutuelle" ? "Montant reçu du client (reste à payer)" : "Montant reçu"}>
                     <input type="number" min="0" value={montantEspeces} onChange={(e) => setMontantEspeces(e.target.value)} placeholder="0" />
                   </Field>
                 )}
-                {modePaiement !== "especes" && (
+                {(modePaiement === "mobile" || modePaiement === "mixte") && (
                   <Field label={modePaiement === "mixte" ? "Montant en Mobile Money" : "Montant reçu"}>
                     <input type="number" min="0" value={montantMobile} onChange={(e) => setMontantMobile(e.target.value)} placeholder="0" />
                   </Field>
@@ -1636,7 +1699,7 @@ function Ventes({ meds, sales, clients, retours, enLigne, pharmacieId, pharmacie
                 {montantRecu > 0 && (
                   <div className={`pay-summary ${paiementInsuffisant ? "pay-summary-warn" : ""}`}>
                     {paiementInsuffisant
-                      ? `Il manque ${fmtFCFA(total - montantRecu)}`
+                      ? `Il manque ${fmtFCFA(resteAPayer - montantRecu)}`
                       : `Monnaie à rendre : ${fmtFCFA(monnaie)}`}
                   </div>
                 )}
@@ -1873,7 +1936,7 @@ function RetourModal({ sale, retours, onClose, onSave }) {
 // ================= REÇU (impression) =================
 function ReceiptModal({ sale, pharmacieEmail, onClose }) {
   const [thermique, setThermique] = useState(false);
-  const modeLabel = { especes: "Espèces", mobile: "Mobile Money", mixte: "Espèces + Mobile Money" }[sale.modePaiement];
+  const modeLabel = { especes: "Espèces", mobile: "Mobile Money", mixte: "Espèces + Mobile Money", mutuelle: "Mutuelle" }[sale.modePaiement];
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -1919,6 +1982,13 @@ function ReceiptModal({ sale, pharmacieEmail, onClose }) {
               <div>Paiement : {modeLabel}</div>
               {sale.modePaiement === "mixte" && (
                 <div>Espèces {fmtFCFA(sale.montantEspeces || 0)} + Mobile {fmtFCFA(sale.montantMobile || 0)}</div>
+              )}
+              {sale.modePaiement === "mutuelle" && sale.mutuelle && (
+                <>
+                  <div>{sale.mutuelle.nom || "Mutuelle"} ({sale.mutuelle.taux}%) : {fmtFCFA(sale.mutuelle.montantCouvert)}</div>
+                  <div>Part client : {fmtFCFA(sale.total - sale.mutuelle.montantCouvert)}</div>
+                  {sale.mutuelle.numeroBon && <div>Bon n° {sale.mutuelle.numeroBon}</div>}
+                </>
               )}
               {sale.monnaie > 0 && <div>Monnaie rendue : {fmtFCFA(sale.monnaie)}</div>}
             </div>
@@ -1968,7 +2038,7 @@ function Clients({ clients, pharmacieId, sales, notify }) {
         title="Clients"
         sub={`${clients.length} fiche(s) client`}
         action={
-          <button className="btn-primary" onClick={() => setModal({ id: null, name: "", phone: "", notes: "" })}>
+          <button className="btn-primary" onClick={() => setModal({ id: null, name: "", phone: "", notes: "", mutuelleNom: "", mutuelleNumero: "", mutuelleTaux: "" })}>
             <Plus size={16} /> Ajouter un client
           </button>
         }
@@ -2025,6 +2095,23 @@ function ClientModal({ data, onClose, onSave }) {
         <Field label="Téléphone">
           <input value={form.phone} onChange={set("phone")} placeholder="Ex: 07 00 00 00 00" />
         </Field>
+        <Field label="Mutuelle / assurance santé (optionnel)">
+          <input value={form.mutuelleNom || ""} onChange={set("mutuelleNom")} placeholder="Ex: NSIA Santé" />
+        </Field>
+        {form.mutuelleNom && (
+          <>
+            <Field label="Numéro de carte mutuelle">
+              <input value={form.mutuelleNumero || ""} onChange={set("mutuelleNumero")} placeholder="Ex: NS-2024-00458" />
+            </Field>
+            <Field label="Taux de couverture habituel (%)">
+              <input
+                type="number" min="0" max="100" value={form.mutuelleTaux || ""}
+                onChange={(e) => setForm((f) => ({ ...f, mutuelleTaux: e.target.value }))}
+                placeholder="Ex: 70"
+              />
+            </Field>
+          </>
+        )}
         <Field label="Notes (allergies, traitement en cours…)">
           <textarea value={form.notes} onChange={set("notes")} rows={3} />
         </Field>
@@ -2801,6 +2888,111 @@ function traduireErreurInvite(code) {
   return map[code] || "Une erreur est survenue lors de l'invitation.";
 }
 
+
+// ================= MUTUELLES =================
+// Suivi des "bons" de prise en charge par les mutuelles/assurances
+// santé (tiers payant) — chaque vente réglée (au moins en partie) par
+// une mutuelle crée un bon ici, indépendant du journal des ventes
+// (immuable). Le gérant peut filtrer par mutuelle, marquer un bon
+// comme remboursé une fois le paiement reçu, et exporter la liste à
+// envoyer à l'assureur pour justificatif.
+function Mutuelles({ bons, pharmacieId, notify }) {
+  const [filtre, setFiltre] = useState("Tous");
+  const [statutFiltre, setStatutFiltre] = useState("Tous");
+
+  const mutuellesListe = useMemo(
+    () => Array.from(new Set(bons.map((b) => b.mutuelleNom).filter(Boolean))),
+    [bons]
+  );
+
+  const filtered = useMemo(() => {
+    return bons
+      .filter((b) => filtre === "Tous" || b.mutuelleNom === filtre)
+      .filter((b) => statutFiltre === "Tous" || b.statut === statutFiltre);
+  }, [bons, filtre, statutFiltre]);
+
+  const enAttenteTotal = useMemo(
+    () => bons.filter((b) => b.statut === "en_attente").reduce((sum, b) => sum + b.montant, 0),
+    [bons]
+  );
+
+  async function handleRembourse(bon) {
+    await marquerBonRembourse(pharmacieId, bon.id);
+    notify(`Bon de ${bon.client} marqué remboursé.`);
+  }
+
+  function handleExport() {
+    const rows = filtered.map((b) => ({
+      "Date": b.date, "Client": b.client, "Mutuelle": b.mutuelleNom,
+      "N° carte": b.mutuelleNumero, "N° bon": b.numeroBon,
+      "Taux": `${b.taux}%`, "Montant à réclamer (FCFA)": b.montant,
+      "Statut": b.statut === "rembourse" ? "Remboursé" : "En attente",
+    }));
+    exportToExcel([{ name: "Bons mutuelle", rows }], `bons-mutuelle-${todayISO()}.xlsx`);
+  }
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Mutuelles"
+        sub={`${bons.length} bon(s) · ${fmtFCFA(enAttenteTotal)} en attente de remboursement`}
+        action={
+          <button className="btn-ghost" onClick={handleExport}>
+            <Download size={16} /> Exporter
+          </button>
+        }
+      />
+
+      <div className="toolbar">
+        <select className="select" value={filtre} onChange={(e) => setFiltre(e.target.value)}>
+          <option>Tous</option>
+          {mutuellesListe.map((m) => <option key={m}>{m}</option>)}
+        </select>
+        <select className="select" value={statutFiltre} onChange={(e) => setStatutFiltre(e.target.value)}>
+          <option>Tous</option>
+          <option value="en_attente">En attente</option>
+          <option value="rembourse">Remboursé</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="panel"><EmptyRow text="Aucun bon mutuelle pour le moment." /></div>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr><th>Date</th><th>Client</th><th>Mutuelle</th><th>N° bon</th><th>Montant</th><th>Statut</th><th></th></tr>
+            </thead>
+            <tbody>
+              {filtered.map((b) => (
+                <tr key={b.id}>
+                  <td>{b.date}</td>
+                  <td className="td-strong">{b.client}</td>
+                  <td>{b.mutuelleNom || "—"}<div className="td-sub">{b.mutuelleNumero}</div></td>
+                  <td className="td-sub">{b.numeroBon || "—"}</td>
+                  <td className="td-strong">{fmtFCFA(b.montant)}<div className="td-sub">{b.taux}%</div></td>
+                  <td>
+                    <Badge tone={b.statut === "rembourse" ? "ok" : "warn"}>
+                      {b.statut === "rembourse" ? "Remboursé" : "En attente"}
+                    </Badge>
+                    {b.dateRemboursement && <div className="td-sub">le {b.dateRemboursement}</div>}
+                  </td>
+                  <td className="td-actions">
+                    {b.statut === "en_attente" && (
+                      <button className="icon-btn" onClick={() => handleRembourse(b)} title="Marquer remboursé">
+                        <CheckCircle2 size={15} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ================= JOURNAL D'AUDIT =================
 // Historique en lecture seule des actions sensibles (stock, argent,
