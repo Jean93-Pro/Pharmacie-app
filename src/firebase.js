@@ -764,3 +764,57 @@ export async function marquerBonRembourse(pharmacieId, bonId) {
     dateRemboursement: new Date().toISOString().slice(0, 10),
   });
 }
+
+// ---------------------------------------------------------------
+// CAISSE — sessions d'ouverture/fermeture. Une seule session peut
+// être "ouverte" à la fois pour la pharmacie (un tiroir-caisse
+// physique). Les compteurs (ventes espèces, retours espèces,
+// montant théorique) sont calculés côté App.jsx à partir des ventes
+// et retours déjà chargés en mémoire (pas de lecture supplémentaire),
+// puis transmis ici pour être figés sur la session au moment de la
+// fermeture.
+// pharmacies/{pharmacieId}/caisse/{sessionId}
+// ---------------------------------------------------------------
+export function subscribeCaisse(pharmacieId, callback, max = 200) {
+  const ref = query(
+    collection(db, "pharmacies", pharmacieId, "caisse"),
+    orderBy("ouvertureAt", "desc"),
+    limit(max)
+  );
+  return onSnapshot(ref, (snap) => {
+    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  });
+}
+
+export async function ouvrirCaisse(pharmacieId, fondCaisse) {
+  const ref = collection(db, "pharmacies", pharmacieId, "caisse");
+  const docRef = await addDoc(ref, {
+    statut: "ouverte",
+    fondCaisse,
+    ouvertureDate: new Date().toISOString().slice(0, 10),
+    ouvertureHeure: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    ouvertureEmployeEmail: auth.currentUser ? auth.currentUser.email : null,
+    ouvertureAt: serverTimestamp(),
+  });
+  logAudit(pharmacieId, "caisse_ouverte", { fondCaisse });
+  return docRef.id;
+}
+
+// data contient les montants déjà calculés côté App.jsx :
+// { ventesEspeces, retoursEspeces, montantTheorique, montantCompte, ecart, notes }
+export async function fermerCaisse(pharmacieId, sessionId, data) {
+  const ref = doc(db, "pharmacies", pharmacieId, "caisse", sessionId);
+  await updateDoc(ref, {
+    statut: "fermee",
+    fermetureDate: new Date().toISOString().slice(0, 10),
+    fermetureHeure: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    fermetureEmployeEmail: auth.currentUser ? auth.currentUser.email : null,
+    fermetureAt: serverTimestamp(),
+    ...data,
+  });
+  logAudit(pharmacieId, "caisse_fermee", {
+    montantTheorique: data.montantTheorique,
+    montantCompte: data.montantCompte,
+    ecart: data.ecart,
+  });
+}
