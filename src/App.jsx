@@ -14,6 +14,7 @@ import {
   subscribeAudit,
   subscribeBons, marquerBonRembourse,
   addLotAMed, subscribeOrdonnances, addOrdonnance, updateOrdonnance, deleteOrdonnance,
+  subscribeCaisse, ouvrirCaisse, fermerCaisse,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -252,6 +253,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [depenses, setDepenses] = useState([]);
   const [audit, setAudit] = useState([]);
   const [bons, setBons] = useState([]);
+  const [caisseSessions, setCaisseSessions] = useState([]);
   const [enLigne, setEnLigne] = useState(true);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
@@ -280,6 +282,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubDepenses = subscribeDepenses(pharmacieId, setDepenses);
     const unsubAudit = subscribeAudit(pharmacieId, setAudit);
     const unsubBons = subscribeBons(pharmacieId, setBons);
+    const unsubCaisse = subscribeCaisse(pharmacieId, setCaisseSessions);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -311,6 +314,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubDepenses();
       unsubAudit();
       unsubBons();
+      unsubCaisse();
     };
   }, [pharmacieId]);
 
@@ -445,6 +449,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     { id: "alertes", label: "Alertes", icon: AlertTriangle },
     { id: "stock", label: "Stock", icon: Package },
     { id: "ventes", label: "Ventes", icon: ShoppingCart },
+    { id: "caisse", label: "Caisse", icon: Banknote },
     { id: "clients", label: "Clients", icon: Users },
     { id: "fournisseurs", label: "Fournisseurs", icon: Truck },
     { id: "ordonnances", label: "Ordonnances", icon: Stethoscope },
@@ -555,6 +560,12 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
         {tab === "ventes" && (
           <Ventes
             meds={meds} sales={sales} clients={clients} retours={retours} enLigne={enLigne}
+            pharmacieId={pharmacieId} pharmacieEmail={pharmacieEmail} notify={notify}
+          />
+        )}
+        {tab === "caisse" && (
+          <Caisse
+            caisseSessions={caisseSessions} sales={sales} retours={retours}
             pharmacieId={pharmacieId} pharmacieEmail={pharmacieEmail} notify={notify}
           />
         )}
@@ -2004,6 +2015,234 @@ function ReceiptModal({ sale, pharmacieEmail, onClose }) {
   );
 }
 
+// ================= CAISSE =================
+// Sessions d'ouverture/fermeture de caisse. Une seule session peut
+// être ouverte à la fois. Le montant théorique en espèces à la
+// fermeture est calculé à partir des ventes (champ montantEspeces,
+// qui reflète toujours le cash réellement reçu quel que soit le mode
+// de paiement) et des retours (montant remboursé, supposé rendu en
+// espèces) survenus depuis l'ouverture — à comparer au comptage
+// physique du tiroir fait par l'employé qui ferme la caisse.
+function toMs(ts) {
+  if (!ts) return 0;
+  if (ts.toMillis) return ts.toMillis();
+  if (ts.seconds) return ts.seconds * 1000;
+  return 0;
+}
+
+function Caisse({ caisseSessions, sales, retours, pharmacieId, pharmacieEmail, notify }) {
+  const [modalOuverture, setModalOuverture] = useState(false);
+  const [modalFermeture, setModalFermeture] = useState(false);
+
+  const sessionOuverte = caisseSessions.find((s) => s.statut === "ouverte");
+  const historique = caisseSessions.filter((s) => s.statut === "fermee");
+
+  const { ventesEspeces, retoursEspeces, montantTheorique } = useMemo(() => {
+    if (!sessionOuverte) return { ventesEspeces: 0, retoursEspeces: 0, montantTheorique: 0 };
+    const ouvertureMs = toMs(sessionOuverte.ouvertureAt);
+    const ve = sales
+      .filter((s) => toMs(s.createdAt) >= ouvertureMs)
+      .reduce((sum, s) => sum + (s.montantEspeces || 0), 0);
+    const re = retours
+      .filter((r) => toMs(r.createdAt) >= ouvertureMs)
+      .reduce((sum, r) => sum + (r.total || 0), 0);
+    return { ventesEspeces: ve, retoursEspeces: re, montantTheorique: (sessionOuverte.fondCaisse || 0) + ve - re };
+  }, [sessionOuverte, sales, retours]);
+
+  async function handleOuvrir(fondCaisse) {
+    await ouvrirCaisse(pharmacieId, fondCaisse);
+    notify("Caisse ouverte.");
+    setModalOuverture(false);
+  }
+
+  async function handleFermer(montantCompte, notes) {
+    const ecart = montantCompte - montantTheorique;
+    await fermerCaisse(pharmacieId, sessionOuverte.id, {
+      ventesEspeces, retoursEspeces, montantTheorique, montantCompte, ecart, notes,
+    });
+    notify(
+      ecart === 0
+        ? "Caisse fermée · aucun écart."
+        : `Caisse fermée · écart de ${fmtFCFA(Math.abs(ecart))} ${ecart > 0 ? "en trop" : "manquant"}.`,
+      ecart === 0 ? "ok" : "danger"
+    );
+    setModalFermeture(false);
+  }
+
+  function handleExport() {
+    const rows = historique.map((s) => ({
+      "Ouverture": `${s.ouvertureDate} ${s.ouvertureHeure}`,
+      "Ouvert par": s.ouvertureEmployeEmail || "",
+      "Fermeture": `${s.fermetureDate} ${s.fermetureHeure}`,
+      "Fermé par": s.fermetureEmployeEmail || "",
+      "Fond de caisse (FCFA)": s.fondCaisse,
+      "Ventes espèces (FCFA)": s.ventesEspeces,
+      "Retours espèces (FCFA)": s.retoursEspeces,
+      "Théorique (FCFA)": s.montantTheorique,
+      "Compté (FCFA)": s.montantCompte,
+      "Écart (FCFA)": s.ecart,
+      "Notes": s.notes || "",
+    }));
+    exportToExcel([{ name: "Caisse", rows }], `caisse-${todayISO()}.xlsx`);
+  }
+
+  return (
+    <div className="page">
+      <PageHead
+        title="Caisse"
+        sub={sessionOuverte ? `Ouverte depuis ${sessionOuverte.ouvertureHeure} par ${sessionOuverte.ouvertureEmployeEmail || "—"}` : "Aucune session en cours"}
+        action={
+          <div className="page-actions">
+            {historique.length > 0 && (
+              <button className="btn-ghost" onClick={handleExport}>
+                <Download size={16} /> Exporter l'historique
+              </button>
+            )}
+            {sessionOuverte ? (
+              <button className="btn-danger" onClick={() => setModalFermeture(true)}>
+                <Lock size={16} /> Fermer la caisse
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={() => setModalOuverture(true)}>
+                <Banknote size={16} /> Ouvrir la caisse
+              </button>
+            )}
+          </div>
+        }
+      />
+
+      {sessionOuverte ? (
+        <div className="stat-grid">
+          <StatCard icon={Wallet} label="Fond de caisse" value={fmtFCFA(sessionOuverte.fondCaisse)} tone="ink" />
+          <StatCard icon={Banknote} label="Ventes espèces depuis l'ouverture" value={fmtFCFA(ventesEspeces)} tone="teal" />
+          <StatCard icon={RotateCcw} label="Retours espèces depuis l'ouverture" value={fmtFCFA(retoursEspeces)} tone="amber" />
+          <StatCard icon={Wallet} label="Montant théorique en caisse" value={fmtFCFA(montantTheorique)} tone="ok" />
+        </div>
+      ) : (
+        <div className="panel">
+          <EmptyRow text="La caisse n'est pas ouverte. Ouvrez-la en début de journée avec le fond de caisse de départ." />
+        </div>
+      )}
+
+      <div className="panel">
+        <div className="panel-head">
+          <h3><History size={16} /> Historique des sessions ({historique.length})</h3>
+        </div>
+        {historique.length === 0 ? (
+          <EmptyRow text="Aucune session de caisse fermée pour le moment." />
+        ) : (
+          <div className="table-wrap" style={{ marginTop: 4 }}>
+            <table className="table">
+              <thead>
+                <tr><th>Ouverture</th><th>Fermeture</th><th>Fond</th><th>Théorique</th><th>Compté</th><th>Écart</th></tr>
+              </thead>
+              <tbody>
+                {historique.map((s) => (
+                  <tr key={s.id}>
+                    <td>{s.ouvertureDate} {s.ouvertureHeure}<div className="td-sub">{s.ouvertureEmployeEmail}</div></td>
+                    <td>{s.fermetureDate} {s.fermetureHeure}<div className="td-sub">{s.fermetureEmployeEmail}</div></td>
+                    <td>{fmtFCFA(s.fondCaisse)}</td>
+                    <td>{fmtFCFA(s.montantTheorique)}</td>
+                    <td>{fmtFCFA(s.montantCompte)}</td>
+                    <td>
+                      <Badge tone={s.ecart === 0 ? "ok" : Math.abs(s.ecart) <= 500 ? "warn" : "danger"}>
+                        {s.ecart === 0 ? "Aucun écart" : `${s.ecart > 0 ? "+" : ""}${fmtFCFA(s.ecart)}`}
+                      </Badge>
+                      {s.notes && <div className="td-sub">{s.notes}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {modalOuverture && (
+        <OuvertureCaisseModal onClose={() => setModalOuverture(false)} onSave={handleOuvrir} />
+      )}
+      {modalFermeture && sessionOuverte && (
+        <FermetureCaisseModal
+          montantTheorique={montantTheorique}
+          onClose={() => setModalFermeture(false)}
+          onSave={handleFermer}
+        />
+      )}
+    </div>
+  );
+}
+
+function OuvertureCaisseModal({ onClose, onSave }) {
+  const [fondCaisse, setFondCaisse] = useState("");
+  const [chargement, setChargement] = useState(false);
+
+  async function submit() {
+    setChargement(true);
+    await onSave(Number(fondCaisse) || 0);
+    setChargement(false);
+  }
+
+  return (
+    <Modal title="Ouvrir la caisse" onClose={onClose}>
+      <div className="form-grid form-grid-1">
+        <Field label="Fond de caisse de départ (FCFA)">
+          <input type="number" min="0" value={fondCaisse} onChange={(e) => setFondCaisse(e.target.value)} placeholder="Ex: 20000" autoFocus />
+        </Field>
+        <p className="td-sub">
+          Il s'agit du montant en espèces déjà présent dans le tiroir avant la première vente de la journée.
+        </p>
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button className="btn-primary" disabled={fondCaisse === "" || chargement} onClick={submit}>
+          {chargement ? "Un instant…" : "Ouvrir la caisse"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function FermetureCaisseModal({ montantTheorique, onClose, onSave }) {
+  const [montantCompte, setMontantCompte] = useState("");
+  const [notes, setNotes] = useState("");
+  const [chargement, setChargement] = useState(false);
+
+  const ecart = montantCompte !== "" ? Number(montantCompte) - montantTheorique : null;
+
+  async function submit() {
+    setChargement(true);
+    await onSave(Number(montantCompte) || 0, notes);
+    setChargement(false);
+  }
+
+  return (
+    <Modal title="Fermer la caisse" onClose={onClose}>
+      <div className="form-grid form-grid-1">
+        <p className="confirm-text" style={{ padding: 0 }}>
+          Montant théorique attendu dans le tiroir : <strong>{fmtFCFA(montantTheorique)}</strong>
+        </p>
+        <Field label="Montant compté physiquement (FCFA)">
+          <input type="number" min="0" value={montantCompte} onChange={(e) => setMontantCompte(e.target.value)} placeholder="Ex: 118500" autoFocus />
+        </Field>
+        {ecart !== null && (
+          <div className={`pay-summary ${ecart !== 0 ? "pay-summary-warn" : ""}`}>
+            {ecart === 0 ? "Aucun écart." : `Écart : ${ecart > 0 ? "+" : ""}${fmtFCFA(ecart)} ${ecart > 0 ? "(excédent)" : "(manquant)"}`}
+          </div>
+        )}
+        <Field label="Notes (optionnel)">
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Explication d'un écart, remarques…" />
+        </Field>
+      </div>
+      <div className="modal-actions">
+        <button className="btn-ghost" onClick={onClose}>Annuler</button>
+        <button className="btn-primary" disabled={montantCompte === "" || chargement} onClick={submit}>
+          {chargement ? "Un instant…" : "Confirmer la fermeture"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 // ================= CLIENTS =================
 function Clients({ clients, pharmacieId, sales, notify }) {
   const [modal, setModal] = useState(null);
@@ -3007,6 +3246,8 @@ const AUDIT_LABELS = {
   retour_enregistre: { label: "Retour enregistré", tone: "warn" },
   depense_ajoutee: { label: "Dépense ajoutée", tone: "neutral" },
   depense_supprimee: { label: "Dépense supprimée", tone: "danger" },
+  caisse_ouverte: { label: "Caisse ouverte", tone: "ok" },
+  caisse_fermee: { label: "Caisse fermée", tone: "neutral" },
 };
 
 function formatAuditDetails(entry) {
@@ -3027,6 +3268,12 @@ function formatAuditDetails(entry) {
       return `${d.categorie || ""} · ${fmtFCFA(d.montant || 0)}`;
     case "depense_supprimee":
       return d.depenseId || "";
+    case "caisse_ouverte":
+      return `Fond de départ : ${fmtFCFA(d.fondCaisse || 0)}`;
+    case "caisse_fermee": {
+      const ecart = d.ecart || 0;
+      return `Théorique ${fmtFCFA(d.montantTheorique || 0)} · Compté ${fmtFCFA(d.montantCompte || 0)}${ecart !== 0 ? ` · Écart ${ecart > 0 ? "+" : ""}${fmtFCFA(ecart)}` : ""}`;
+    }
     default:
       return "";
   }
@@ -3100,7 +3347,7 @@ function Journal({ audit }) {
         </div>
       )}
       <p className="td-sub">
-        Le journal conserve les 300 actions les plus récentes (ajout/suppression de médicaments, retours, dépenses, gestion d'équipe).
+        Le journal conserve les 300 actions les plus récentes (ajout/suppression de médicaments, retours, dépenses, gestion d'équipe, ouverture/fermeture de caisse).
       </p>
     </div>
   );
