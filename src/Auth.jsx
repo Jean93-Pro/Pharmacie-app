@@ -1,5 +1,8 @@
 import React, { useState } from "react";
-import { Eye, EyeOff, CheckCircle2, ShieldCheck, TrendingUp, Users } from "lucide-react";
+import {
+  Eye, EyeOff, CheckCircle2, ShieldCheck, TrendingUp, Users,
+  Gift, Truck, Stethoscope, Wallet,
+} from "lucide-react";
 import { inscrirePharmacie, connecterPharmacie, reinitialiserMotDePasse } from "./firebase.js";
 
 // Écran affiché tant qu'aucune pharmacie n'est connectée.
@@ -65,10 +68,16 @@ export default function Auth() {
     setVoirPassword(false);
   }
 
+  // Étendu de 3 à 5 atouts pour donner une vue plus complète de ce que
+  // couvre l'appli (utile pour convaincre une pharmacie qui hésite
+  // encore) — chaque ligne reste courte pour ne pas surcharger le
+  // panneau de présentation.
   const ATOUTS = [
     { icon: TrendingUp, text: "Stock, ventes et alertes de péremption en temps réel" },
+    { icon: Truck, text: "Fournisseurs, commandes et traçabilité des lots (FEFO)" },
+    { icon: Stethoscope, text: "Suivi des ordonnances et rappels de renouvellement" },
     { icon: Users, text: "Toute l'équipe connectée, chacun avec son propre accès" },
-    { icon: ShieldCheck, text: "Données sauvegardées automatiquement, à tout moment" },
+    { icon: Wallet, text: "Comptabilité, rapports et export Excel en un clic" },
   ];
 
   return (
@@ -85,6 +94,11 @@ export default function Auth() {
                 <div className="auth-brand-sub">Gestion de pharmacie</div>
               </div>
             </div>
+
+            <div className="auth-trial-badge">
+              <Gift size={13} /> 14 jours d'essai gratuit — sans carte bancaire
+            </div>
+
             <h1 className="auth-tagline">L'officine, simplement mieux gérée.</h1>
             <p className="auth-tagline-sub">
               Stock, ventes, clients, fournisseurs et comptabilité — tout au même endroit, accessible depuis n'importe quel appareil.
@@ -97,6 +111,11 @@ export default function Auth() {
                 </li>
               ))}
             </ul>
+
+            <div className="auth-trust-row">
+              <span><ShieldCheck size={13} /> Données sauvegardées automatiquement</span>
+              <span>Après l'essai : 15 000 FCFA/mois (Basique) ou 25 000 FCFA/mois (Pro)</span>
+            </div>
           </div>
         </div>
 
@@ -109,6 +128,12 @@ export default function Auth() {
                 <div className="auth-brand-sub">Gestion de pharmacie</div>
               </div>
             </div>
+
+            {mode === "inscription" && (
+              <div className="auth-trial-badge auth-trial-badge-mobile">
+                <Gift size={13} /> 14 jours d'essai gratuit — sans carte bancaire
+              </div>
+            )}
 
             {mode !== "oubli" && (
               <div className="auth-tabs">
@@ -241,6 +266,12 @@ export default function Auth() {
                   : "Se connecter"}
               </button>
 
+              {mode === "inscription" && (
+                <p className="auth-trust-line">
+                  <ShieldCheck size={12} /> Essai gratuit 14 jours, aucune carte bancaire requise. Annulez à tout moment.
+                </p>
+              )}
+
               {mode === "connexion" && (
                 <p className="auth-switch">
                   Pas encore de compte ?{" "}
@@ -319,7 +350,7 @@ const authStyles = `
     top: -160px; right: -160px; pointer-events: none;
   }
   .auth-brand-content { position: relative; z-index: 1; max-width: 380px; }
-  .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 36px; }
+  .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
   .auth-brand-mark {
     width: 38px; height: 38px; border-radius: 9px; background: #f3f1e9; color: var(--teal-deep);
     display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0;
@@ -328,17 +359,39 @@ const authStyles = `
   .auth-brand-title { font-family: var(--font-display); font-size: 17px; font-weight: 600; }
   .auth-brand-sub { font-size: 11px; opacity: 0.7; margin-top: 1px; }
 
+  /* Badge d'essai gratuit — mis en avant tout en haut du panneau,
+     premier repère visuel avant même le slogan, pour lever le frein
+     principal à l'inscription (peur de devoir payer tout de suite). */
+  .auth-trial-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(171,134,54,0.20); color: var(--gold-soft);
+    border: 1px solid rgba(171,134,54,0.4);
+    border-radius: 20px; padding: 5px 12px; font-size: 11.5px; font-weight: 700;
+    margin-bottom: 18px; width: fit-content;
+  }
+  .auth-trial-badge-mobile { margin-bottom: 16px; background: var(--gold-soft); color: var(--amber, #ad7a2e); border-color: var(--gold); }
+
   .auth-tagline {
     font-family: var(--font-display); font-weight: 600; font-size: 32px; line-height: 1.2;
     margin: 0 0 14px; letter-spacing: -0.3px;
   }
-  .auth-tagline-sub { font-size: 13.5px; line-height: 1.6; color: #cfd9d1; margin: 0 0 32px; }
-  .auth-atouts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+  .auth-tagline-sub { font-size: 13.5px; line-height: 1.6; color: #cfd9d1; margin: 0 0 28px; }
+  .auth-atouts { list-style: none; margin: 0 0 26px; padding: 0; display: flex; flex-direction: column; gap: 14px; }
   .auth-atouts li { display: flex; align-items: flex-start; gap: 11px; font-size: 13px; line-height: 1.45; color: #eef0ea; }
   .auth-atout-icon {
     width: 26px; height: 26px; border-radius: 7px; background: rgba(171,134,54,0.22); color: var(--gold-soft);
     display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;
   }
+
+  /* Ligne de réassurance en bas du panneau : sécurité des données +
+     transparence sur le prix après l'essai (évite la mauvaise surprise
+     et rassure sur le fait qu'il n'y a rien de caché). */
+  .auth-trust-row {
+    display: flex; flex-direction: column; gap: 6px; margin-top: 4px;
+    padding-top: 18px; border-top: 1px solid rgba(255,255,255,0.12);
+    font-size: 11.5px; color: #b9c6bd;
+  }
+  .auth-trust-row span { display: flex; align-items: center; gap: 6px; }
 
   /* ---------- Panneau formulaire ---------- */
   .auth-form-panel { display: flex; align-items: center; justify-content: center; padding: 40px 32px; background: var(--paper); }
@@ -384,6 +437,13 @@ const authStyles = `
   .auth-submit:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
   .auth-switch { text-align: center; font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; }
   .auth-switch button { border: none; background: none; color: var(--teal); font-weight: 700; cursor: pointer; padding: 0; font-size: 12px; }
+
+  /* Ligne de réassurance juste sous le bouton d'inscription — au
+     moment précis où l'utilisateur hésite encore à valider. */
+  .auth-trust-line {
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+    text-align: center; font-size: 11px; color: var(--ink-soft); margin: 2px 0 0;
+  }
 
   @media (max-width: 760px) {
     .auth-grid { grid-template-columns: 1fr; }
