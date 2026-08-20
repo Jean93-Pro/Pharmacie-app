@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import Reaact, { useState } from "react";
 import {
   Eye, EyeOff, CheckCircle2, ShieldCheck, TrendingUp, Users,
   Gift, Truck, Stethoscope, Wallet,
 } from "lucide-react";
 import { inscrirePharmacie, connecterPharmacie, reinitialiserMotDePasse } from "./firebase.js";
+import { LegalModal, CGU, PolitiqueConfidentialite, MentionsLegales } from "./Legal.jsx";
 
 // Écran affiché tant qu'aucune pharmacie n'est connectée.
 // Une fois connecté, App.jsx bascule automatiquement vers l'application.
@@ -17,6 +18,7 @@ export default function Auth() {
   const [erreur, setErreur] = useState("");
   const [info, setInfo] = useState("");
   const [chargement, setChargement] = useState(false);
+  const [pageLegale, setPageLegale] = useState(null); // "cgu" | "confidentialite" | "mentions" | null
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -288,6 +290,29 @@ export default function Auth() {
           </div>
         </div>
       </div>
+
+      <div className="auth-legal-footer">
+        <span>© {new Date().getFullYear()} Officine</span>
+        <button type="button" onClick={() => setPageLegale("cgu")}>Conditions d'utilisation</button>
+        <button type="button" onClick={() => setPageLegale("confidentialite")}>Confidentialité</button>
+        <button type="button" onClick={() => setPageLegale("mentions")}>Mentions légales</button>
+      </div>
+
+      {pageLegale === "cgu" && (
+        <LegalModal title="Conditions générales d'utilisation" onClose={() => setPageLegale(null)}>
+          <CGU />
+        </LegalModal>
+      )}
+      {pageLegale === "confidentialite" && (
+        <LegalModal title="Politique de confidentialité" onClose={() => setPageLegale(null)}>
+          <PolitiqueConfidentialite />
+        </LegalModal>
+      )}
+      {pageLegale === "mentions" && (
+        <LegalModal title="Mentions légales" onClose={() => setPageLegale(null)}>
+          <MentionsLegales />
+        </LegalModal>
+      )}
     </div>
   );
 }
@@ -329,14 +354,14 @@ const authStyles = `
     --gold-soft: #f1e5c2;
     --font-display: 'Fraunces', Georgia, serif;
     --font-body: 'IBM Plex Sans', 'Segoe UI', Arial, sans-serif;
-    min-height: 640px; display: flex;
+    min-height: 640px; display: flex; flex-direction: column;
     background: var(--paper); font-family: var(--font-body); color: var(--ink);
     border-radius: 12px; overflow: hidden; border: 1px solid var(--line);
     -webkit-font-smoothing: antialiased;
   }
   .auth-shell * { box-sizing: border-box; }
 
-  .auth-grid { display: grid; grid-template-columns: 1.05fr 1fr; width: 100%; }
+  .auth-grid { display: grid; grid-template-columns: 1.05fr 1fr; width: 100%; flex: 1; }
 
   /* ---------- Panneau de présentation ---------- */
   .auth-brand-panel {
@@ -444,6 +469,19 @@ const authStyles = `
     display: flex; align-items: center; justify-content: center; gap: 5px;
     text-align: center; font-size: 11px; color: var(--ink-soft); margin: 2px 0 0;
   }
+
+  /* Pied de page légal — en dehors de la grille noir/clair, sous le
+     cadre principal, pour rester discret sans nuire à la conversion. */
+  .auth-legal-footer {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 4px 14px; padding: 14px 10px 4px; font-size: 11px; color: var(--ink-soft);
+  }
+  .auth-legal-footer span { color: #9aa89f; }
+  .auth-legal-footer button {
+    border: none; background: none; color: var(--ink-soft); font-size: 11px;
+    cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px;
+  }
+  .auth-legal-footer button:hover { color: var(--teal); }
 
   @media (max-width: 760px) {
     .auth-grid { grid-template-columns: 1fr; }
