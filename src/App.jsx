@@ -25,7 +25,7 @@ import {
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
   Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
-  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine, HeartHandshake
+  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine, HeartHandshake, MessageCircle
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -518,6 +518,14 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           </div>
           <div className="foot-line">{pharmacieEmail}</div>
           <div className="foot-line foot-dim">{role === "gerant" ? "Gérant" : "Caissier"} · Données synchronisées</div>
+          <a
+            className="support-link"
+            href="https://wa.me/2250713800297"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <MessageCircle size={13} /> Assistance WhatsApp
+          </a>
           <button className="logout-btn" onClick={() => deconnecter()}>Se déconnecter</button>
         </div>
       </aside>
@@ -3796,6 +3804,13 @@ function Style() {
       .sidebar-foot { border-top: 1px solid rgba(255,255,255,0.12); padding-top: 12px; margin-top: 8px; }
       .foot-line { font-size: 11px; color: #cfd9d1; word-break: break-all; }
       .foot-dim { opacity: 0.6; margin-top: 2px; }
+      .support-link {
+        display: flex; align-items: center; gap: 6px; margin-top: 10px;
+        font-size: 11px; font-weight: 600; color: #d9e3dc; text-decoration: none;
+        background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14);
+        padding: 6px 8px; border-radius: 7px; transition: background 0.15s ease;
+      }
+      .support-link:hover { background: rgba(255,255,255,0.14); color: #ffffff; }
       .logout-btn {
         margin-top: 10px; width: 100%; background: rgba(255,255,255,0.08);
         border: 1px solid rgba(255,255,255,0.15); color: #f3f1e9;
