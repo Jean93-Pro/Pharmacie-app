@@ -845,7 +845,7 @@ export async function fermerCaisse(pharmacieId, sessionId, data) {
 // ---------------------------------------------------------------
 export const DEMO_EMAIL = "demo@officine-app.ci";
 export const DEMO_PASSWORD = "OfficineDemo2026!";
-export const DEMO_PHARMACIE_ID = "QrEClcLgvWNM5Xe6AtbGAeEVbio2";
+export const DEMO_PHARMACIE_ID = "DlF98pPqSrTrwodpU5yroZCU6053";
 
 function addDaysISODemo(n) {
   const d = new Date();
