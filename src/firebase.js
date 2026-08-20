@@ -818,3 +818,87 @@ export async function fermerCaisse(pharmacieId, sessionId, data) {
     ecart: data.ecart,
   });
 }
+
+// ---------------------------------------------------------------
+// COMPTE DE DÉMONSTRATION — permet à un prospect d'explorer
+// l'application avec des données déjà remplies, sans créer de compte
+// ni renseigner d'email. Le compte est UNIQUE et PARTAGÉ entre tous
+// les visiteurs : à chaque nouvel accès, ses données sont effacées et
+// recréées avec un jeu d'exemple propre, pour que personne ne tombe
+// sur les modifications laissées par le visiteur précédent.
+//
+// IMPORTANT — mise en place à faire une seule fois :
+// 1) Créez le compte demo en vous inscrivant normalement depuis
+//    l'écran de connexion (onglet "Créer une pharmacie") avec
+//    exactement l'email et le mot de passe ci-dessous, et un nom de
+//    pharmacie du type "Démo Officine".
+// 2) Dans la console Firebase > Authentication > Users, repérez ce
+//    compte et copiez son "User UID".
+// 3) Remplacez la valeur de DEMO_PHARMACIE_ID ci-dessous par cet UID
+//    (et faites le même remplacement dans firestore.rules, voir le
+//    commentaire à cet endroit), puis redéployez les règles.
+// Tant que DEMO_PHARMACIE_ID n'a pas été remplacé, le bouton "Essayer
+// la démo" fonctionne quand même pour la connexion et le seed initial,
+// seule la réinitialisation automatique des ventes ne s'applique pas
+// (bloquée par la règle d'immutabilité des ventes tant que l'UID exact
+// n'est pas autorisé dans firestore.rules).
+// ---------------------------------------------------------------
+export const DEMO_EMAIL = "demo@officine-app.ci";
+export const DEMO_PASSWORD = "OfficineDemo2026!";
+export const DEMO_PHARMACIE_ID = "QrEClcLgvWNM5Xe6AtbGAeEVbio2";
+
+function addDaysISODemo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+const DEMO_MEDS = [
+  { name: "Paracétamol 500mg", category: "Antalgique", unit: "Boîte de 20", quantity: 84, minStock: 20, price: 500, coutAchat: 300, expiry: addDaysISODemo(60), supplier: "LABOREX" },
+  { name: "Amoxicilline 500mg", category: "Antibiotique", unit: "Boîte de 12", quantity: 12, minStock: 15, price: 1200, coutAchat: 800, expiry: addDaysISODemo(20), supplier: "UBIPHARM" },
+  { name: "Coartem (ACT)", category: "Antipaludique", unit: "Plaquette", quantity: 30, minStock: 10, price: 2500, coutAchat: 1700, expiry: addDaysISODemo(240), supplier: "PHARMIVOIRE" },
+  { name: "Bétadine solution", category: "Antiseptique", unit: "Flacon 125ml", quantity: 5, minStock: 8, price: 1800, coutAchat: 1100, expiry: addDaysISODemo(-5), supplier: "LABOREX" },
+  { name: "Doliprane sirop enfant", category: "Antalgique", unit: "Flacon 100ml", quantity: 26, minStock: 10, price: 1500, coutAchat: 950, expiry: addDaysISODemo(150), supplier: "SANOFI" },
+  { name: "Vitamine C effervescente", category: "Vitamines", unit: "Tube de 10", quantity: 40, minStock: 12, price: 1000, coutAchat: 600, expiry: addDaysISODemo(300), supplier: "UPSA" },
+];
+
+// Connexion automatique au compte démo partagé, suivie d'une remise à
+// zéro des données pour repartir sur un jeu d'exemple propre à chaque
+// nouvel accès. Si la réinitialisation échoue pour une raison
+// quelconque (ex: DEMO_PHARMACIE_ID pas encore remplacé), on n'échoue
+// pas la connexion pour autant — la personne visite simplement la
+// démo avec les données laissées par le visiteur précédent.
+export async function accederDemo() {
+  await connecterPharmacie(DEMO_EMAIL, DEMO_PASSWORD);
+  try {
+    await reinitialiserDemo();
+  } catch (e) {
+    // Volontairement silencieux — voir commentaire ci-dessus.
+  }
+}
+
+// Supprime toutes les données métier de la pharmacie démo puis les
+// recrée avec un jeu d'exemple. Les documents acces/membres/abonnement
+// de la démo ne sont jamais touchés ici (créés une seule fois au
+// moment de la mise en place, voir les instructions ci-dessus).
+async function reinitialiserDemo() {
+  const collectionsAVider = [
+    "meds", "sales", "clients", "fournisseurs", "commandes",
+    "retours", "ordonnances", "depenses", "audit", "bons", "caisse",
+  ];
+  for (const nom of collectionsAVider) {
+    const ref = collection(db, "pharmacies", DEMO_PHARMACIE_ID, nom);
+    const snap = await getDocs(ref);
+    await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+  }
+
+  await Promise.all(
+    DEMO_MEDS.map((m) => addDoc(collection(db, "pharmacies", DEMO_PHARMACIE_ID, "meds"), m))
+  );
+
+  await setDoc(doc(db, "pharmacies", DEMO_PHARMACIE_ID, "meta", "compteurs"), {
+    totalRevenue: 0,
+    totalCout: 0,
+    totalSalesCount: 0,
+  });
+}
