@@ -63,6 +63,14 @@ export const functions = getFunctions(app);
 export async function inscrirePharmacie(email, password, nomPharmacie) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   const uid = cred.user.uid;
+  // L'accès doit être créé EN PREMIER, avant toute autre écriture :
+  // les règles Firestore de pharmacies/{uid}/* (meta, membres...)
+  // exigent que ce document existe déjà pour autoriser l'écriture.
+  // L'ordre inverse (comme avant) pouvait échouer de façon
+  // intermittente selon la vitesse de la connexion de la personne qui
+  // s'inscrit — une vraie pharmacie pouvait alors voir une erreur à
+  // l'inscription alors que son compte avait bien été créé.
+  await setDoc(doc(db, "acces", uid), { pharmacieId: uid, role: "gerant", email });
   await addDoc(collection(db, "pharmacies", uid, "meta"), {
     nom: nomPharmacie,
     email,
@@ -70,7 +78,6 @@ export async function inscrirePharmacie(email, password, nomPharmacie) {
   });
   // La personne qui crée la pharmacie est automatiquement "gérant",
   // avec accès complet (y compris la gestion de l'équipe).
-  await setDoc(doc(db, "acces", uid), { pharmacieId: uid, role: "gerant", email });
   await setDoc(doc(db, "pharmacies", uid, "membres", uid), {
     email, role: "gerant", creeLe: new Date().toISOString(),
   });
