@@ -1,7 +1,7 @@
-import Reaact, { useState } from "react";
+import React, { useState } from "react";
 import {
   Eye, EyeOff, CheckCircle2, ShieldCheck, TrendingUp, Users,
-  Gift, Truck, Stethoscope, Wallet,
+  Gift, Truck, Stethoscope, Wallet, MessageCircle, Mail,
 } from "lucide-react";
 import { inscrirePharmacie, connecterPharmacie, reinitialiserMotDePasse } from "./firebase.js";
 import { LegalModal, CGU, PolitiqueConfidentialite, MentionsLegales } from "./Legal.jsx";
@@ -291,6 +291,21 @@ export default function Auth() {
         </div>
       </div>
 
+      <div className="auth-support-row">
+        <span>Besoin d'aide avant de commencer ?</span>
+        <a
+          className="auth-support-link"
+          href="https://wa.me/2250713800297"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <MessageCircle size={13} /> WhatsApp
+        </a>
+        <a className="auth-support-link" href="mailto:abokejean5@gmail.com">
+          <Mail size={13} /> abokejean5@gmail.com
+        </a>
+      </div>
+
       <div className="auth-legal-footer">
         <span>© {new Date().getFullYear()} Officine</span>
         <button type="button" onClick={() => setPageLegale("cgu")}>Conditions d'utilisation</button>
@@ -469,6 +484,18 @@ const authStyles = `
     display: flex; align-items: center; justify-content: center; gap: 5px;
     text-align: center; font-size: 11px; color: var(--ink-soft); margin: 2px 0 0;
   }
+
+  /* Bloc support — WhatsApp/email visibles avant même de créer un
+     compte, pour rassurer un prospect qui hésite ou a une question. */
+  .auth-support-row {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 6px 14px; padding: 18px 10px 0; font-size: 11.5px; color: var(--ink-soft);
+  }
+  .auth-support-link {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--teal); font-weight: 600; text-decoration: none;
+  }
+  .auth-support-link:hover { color: var(--teal-deep); text-decoration: underline; }
 
   /* Pied de page légal — en dehors de la grille noir/clair, sous le
      cadre principal, pour rester discret sans nuire à la conversion. */
