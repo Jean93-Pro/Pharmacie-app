@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import {
   Eye, EyeOff, CheckCircle2, ShieldCheck, TrendingUp, Users,
-  Gift, Truck, Stethoscope, Wallet, MessageCircle, Mail,
+  Gift, Truck, Stethoscope, Wallet, MessageCircle, Mail, PlayCircle,
 } from "lucide-react";
-import { inscrirePharmacie, connecterPharmacie, reinitialiserMotDePasse } from "./firebase.js";
+import { inscrirePharmacie, connecterPharmacie, reinitialiserMotDePasse, accederDemo } from "./firebase.js";
 import { LegalModal, CGU, PolitiqueConfidentialite, MentionsLegales } from "./Legal.jsx";
 
 // Écran affiché tant qu'aucune pharmacie n'est connectée.
@@ -18,6 +18,7 @@ export default function Auth() {
   const [erreur, setErreur] = useState("");
   const [info, setInfo] = useState("");
   const [chargement, setChargement] = useState(false);
+  const [chargementDemo, setChargementDemo] = useState(false);
   const [pageLegale, setPageLegale] = useState(null); // "cgu" | "confidentialite" | "mentions" | null
 
   async function handleSubmit(e) {
@@ -58,6 +59,24 @@ export default function Auth() {
       setErreur(traduireErreur(err.code));
     } finally {
       setChargement(false);
+    }
+  }
+
+  // Connexion directe au compte de démonstration partagé, sans
+  // passer par le formulaire — le jeu de données est remis à zéro
+  // automatiquement à chaque accès (voir accederDemo dans firebase.js).
+  async function handleDemo() {
+    setErreur("");
+    setInfo("");
+    setChargementDemo(true);
+    try {
+      await accederDemo();
+      // Pas de redirection manuelle : ecouterConnexion() dans App.jsx
+      // détecte la connexion et affiche l'application automatiquement.
+    } catch (err) {
+      setErreur("Impossible de charger la démo pour le moment. Réessayez dans un instant.");
+    } finally {
+      setChargementDemo(false);
     }
   }
 
@@ -162,6 +181,21 @@ export default function Auth() {
                   ← Retour à la connexion
                 </button>
               </div>
+            )}
+
+            {mode !== "oubli" && (
+              <>
+                <button
+                  type="button"
+                  className="auth-demo-btn"
+                  onClick={handleDemo}
+                  disabled={chargementDemo}
+                >
+                  <PlayCircle size={16} />
+                  {chargementDemo ? "Chargement de la démo…" : "Essayer la démo, sans inscription"}
+                </button>
+                <div className="auth-divider"><span>ou</span></div>
+              </>
             )}
 
             <div className="auth-form-head">
@@ -437,6 +471,21 @@ const authStyles = `
   .auth-form-panel { display: flex; align-items: center; justify-content: center; padding: 40px 32px; background: var(--paper); }
   .auth-card { width: 100%; max-width: 340px; }
   .auth-card-head-mobile { display: none; align-items: center; gap: 10px; margin-bottom: 22px; }
+
+  /* Bouton "Essayer la démo" — alternative légère, sans engagement,
+     mise en avant avant même les onglets Connexion/Inscription pour
+     réduire le frein à l'essai. */
+  .auth-demo-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; border: 1.5px dashed var(--gold); background: var(--gold-soft);
+    color: #7a5d24; padding: 10px; border-radius: 9px; font-size: 13px; font-weight: 700;
+    cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .auth-demo-btn:hover { background: #ecdda3; }
+  .auth-demo-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .auth-divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; }
+  .auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .auth-divider span { font-size: 11px; color: #9aa89f; font-weight: 600; }
 
   .auth-form-head { margin-bottom: 20px; }
   .auth-form-head h2 { font-family: var(--font-display); font-size: 21px; font-weight: 600; margin: 0 0 5px; color: var(--teal-deep); letter-spacing: -0.2px; }
