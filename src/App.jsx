@@ -3887,6 +3887,7 @@ function Style() {
         overflow: hidden; flex-shrink: 0;
       }
       .brand-mark img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
+      .brand-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
       .brand-title { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: 0.2px; }
       .brand-sub { font-size: 11px; opacity: 0.65; margin-top: 1px; }
 
@@ -4040,6 +4041,20 @@ function Style() {
 
       .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       .form-grid-1 { grid-template-columns: 1fr; }
+
+      /* Bloc "Traçabilité des lots" dans la fiche médicament (mode
+         édition) — séparé du reste du formulaire par un filet, avec
+         une ligne d'ajout de lot alignée sur 3 champs + un bouton. */
+      .lots-section { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--line); }
+      .lot-add-row {
+        display: grid; grid-template-columns: 1fr 90px 140px auto; gap: 8px; margin-top: 10px; align-items: center;
+      }
+      .lot-add-row input {
+        border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px;
+        font-size: 12.5px; font-family: inherit; color: var(--ink); background: var(--panel); width: 100%;
+      }
+      .lot-add-row input:focus { outline: 2px solid var(--teal); outline-offset: 1px; }
+      .lot-add-row button { white-space: nowrap; }
       .invite-hint { display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; color: var(--ink-soft); background: var(--sage); padding: 9px 10px; border-radius: 8px; line-height: 1.4; }
       .field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
       .field-label { color: var(--ink-soft); font-weight: 600; }
@@ -4061,6 +4076,22 @@ function Style() {
       .cart-item-controls { display: flex; align-items: center; gap: 6px; font-weight: 600; }
       .cart-item-price { color: var(--ink-soft); font-size: 12.5px; }
       .cart-total-row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding-top: 8px; border-top: 1px solid var(--line); font-weight: 700; }
+
+      /* Lignes de saisie compactes des modals "commande" (retour,
+         ordonnance, commande fournisseur) — mêmes principes que
+         .cart-list li mais avec un nombre de colonnes propre à chaque
+         cas, pour un alignement net sur plusieurs lignes. */
+      .commande-item {
+        display: grid; grid-template-columns: 1fr 90px auto; align-items: center; gap: 10px;
+        font-size: 13px; padding-bottom: 8px; border-bottom: 1px dashed var(--line);
+      }
+      .commande-item-lot { grid-template-columns: 1fr 64px 90px 1fr 130px auto; }
+      .commande-input {
+        width: 100%; border: 1px solid var(--line); border-radius: 7px;
+        padding: 7px 8px; font-size: 12.5px; font-family: inherit; color: var(--ink); background: var(--panel);
+      }
+      .commande-input:focus { outline: 2px solid var(--teal); outline-offset: 1px; }
+      .commande-input-lot { min-width: 0; }
 
       .pay-block { display: flex; flex-direction: column; gap: 9px; padding-top: 10px; margin-top: 10px; border-top: 1px dashed var(--line); }
       .pay-modes { display: flex; gap: 6px; }
@@ -4084,6 +4115,7 @@ function Style() {
       .client-card-head { display: flex; gap: 10px; align-items: center; }
       .client-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--sage); color: var(--teal-deep); display: flex; align-items: center; justify-content: center; font-weight: 700; font-family: var(--font-display); }
       .client-notes { font-size: 12px; color: var(--ink-soft); margin: 10px 0 0; }
+      .fourn-contact { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; }
       .client-card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
 
       .bar-chart { display: flex; align-items: flex-end; gap: 10px; height: 140px; padding-top: 10px; }
@@ -4158,6 +4190,7 @@ function Style() {
         .sidebar-foot { display: none; }
         .brand-sub { display: none; }
         .stat-grid, .form-grid { grid-template-columns: 1fr; }
+        .commande-item, .commande-item-lot, .lot-add-row { grid-template-columns: 1fr; gap: 6px; }
 
         .main { padding: 16px; }
         .page-head { flex-wrap: wrap; align-items: flex-start; }
