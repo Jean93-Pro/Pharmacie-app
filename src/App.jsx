@@ -15,6 +15,7 @@ import {
   subscribeBons, marquerBonRembourse,
   addLotAMed, subscribeOrdonnances, addOrdonnance, updateOrdonnance, deleteOrdonnance,
   subscribeCaisse, ouvrirCaisse, fermerCaisse,
+  subscribeOnboarding, marquerOnboardingVu,
 } from "./firebase.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
@@ -25,7 +26,7 @@ import {
   TrendingDown, CheckCircle2, XCircle, Minus, ReceiptText, PackageSearch,
   UserPlus, ShieldCheck, Download, Upload, CreditCard, Lock, Smartphone, Globe,
   Truck, PhoneCall, Mail, MapPin, PackageCheck, Ban, RotateCcw,
-  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine, HeartHandshake, MessageCircle
+  Stethoscope, Tag, HardDriveDownload, Wallet, History, Banknote, Wifi, WifiOff, Printer, ScanLine, HeartHandshake, MessageCircle, HelpCircle
 } from "lucide-react";
 
 // Construit et télécharge un fichier Excel (.xlsx) à partir d'une ou
@@ -254,6 +255,8 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
   const [audit, setAudit] = useState([]);
   const [bons, setBons] = useState([]);
   const [caisseSessions, setCaisseSessions] = useState([]);
+  const [onboarding, setOnboarding] = useState(null);
+  const [guideOuvert, setGuideOuvert] = useState(false);
   const [enLigne, setEnLigne] = useState(true);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
@@ -283,6 +286,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubAudit = subscribeAudit(pharmacieId, setAudit);
     const unsubBons = subscribeBons(pharmacieId, setBons);
     const unsubCaisse = subscribeCaisse(pharmacieId, setCaisseSessions);
+    const unsubOnboarding = subscribeOnboarding(pharmacieId, setOnboarding);
 
     // Écoute en temps réel : toute modification faite par un membre de
     // l'équipe (sur un autre appareil) met à jour l'affichage instantanément.
@@ -315,6 +319,7 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
       unsubAudit();
       unsubBons();
       unsubCaisse();
+      unsubOnboarding();
     };
   }, [pharmacieId]);
 
@@ -325,6 +330,21 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
     const unsubReseau = ecouterReseau(setEnLigne);
     return () => unsubReseau();
   }, []);
+
+  // Affiche automatiquement le guide de démarrage une seule fois, à la
+  // première connexion du gérant (jamais aux caissiers, qui n'ont pas
+  // à configurer la pharmacie). Reste ensuite accessible manuellement
+  // via le bouton "Guide de démarrage" du menu.
+  useEffect(() => {
+    if (!loading && role === "gerant" && onboarding && onboarding.vu === false) {
+      setGuideOuvert(true);
+    }
+  }, [loading, role, onboarding]);
+
+  function fermerGuide() {
+    setGuideOuvert(false);
+    if (onboarding && !onboarding.vu) marquerOnboardingVu(pharmacieId);
+  }
 
   const notify = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone, id: uid() });
@@ -518,6 +538,11 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           </div>
           <div className="foot-line">{pharmacieEmail}</div>
           <div className="foot-line foot-dim">{role === "gerant" ? "Gérant" : "Caissier"} · Données synchronisées</div>
+          {role === "gerant" && (
+            <button className="support-link" onClick={() => setGuideOuvert(true)}>
+              <HelpCircle size={13} /> Guide de démarrage
+            </button>
+          )}
           <a
             className="support-link"
             href="https://wa.me/2250713800297"
@@ -627,6 +652,87 @@ function PharmacieApp({ pharmacieId, pharmacieEmail, role }) {
           {toast.msg}
         </div>
       )}
+
+      {guideOuvert && <GuideDemarrage onClose={fermerGuide} setTab={setTab} />}
+    </div>
+  );
+}
+
+// ================= GUIDE DE DÉMARRAGE =================
+// Checklist courte affichée automatiquement à la première connexion
+// du gérant, et réaccessible à tout moment depuis le menu. Chaque
+// étape renvoie directement vers l'onglet concerné pour passer à
+// l'action sans avoir à chercher où cliquer.
+function GuideDemarrage({ onClose, setTab }) {
+  const ETAPES = [
+    {
+      icon: Package,
+      titre: "Renseignez le coût d'achat de vos médicaments",
+      texte: "Dans l'onglet Stock, ajoutez le \"Coût d'achat\" de chaque article — c'est ce qui permet à la Comptabilité de calculer votre marge réelle, pas seulement le chiffre d'affaires.",
+      tab: "stock",
+    },
+    {
+      icon: Upload,
+      titre: "Importez votre stock existant",
+      texte: "Si vous avez déjà une liste de médicaments (papier ou Excel), utilisez le bouton \"Importer\" dans Stock plutôt que de tout ressaisir article par article.",
+      tab: "stock",
+    },
+    {
+      icon: UserPlus,
+      titre: "Invitez votre équipe",
+      texte: "Chaque caissier doit avoir son propre accès — jamais de mot de passe partagé. Ça se fait dans l'onglet Équipe, en quelques secondes.",
+      tab: "equipe",
+    },
+    {
+      icon: Banknote,
+      titre: "Ouvrez la caisse chaque matin",
+      texte: "Dans l'onglet Caisse, indiquez le fond de caisse de départ. Vous pourrez comparer le montant théorique au comptage réel à la fermeture.",
+      tab: "caisse",
+    },
+    {
+      icon: MessageCircle,
+      titre: "Besoin d'aide ?",
+      texte: "Le bouton \"Assistance WhatsApp\" en bas du menu vous met directement en contact avec le support, à tout moment.",
+      tab: null,
+    },
+  ];
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-panel modal-wide">
+        <div className="modal-head">
+          <h3>Bien démarrer avec Officine</h3>
+          <button className="icon-btn" onClick={onClose} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <div className="modal-body">
+          <p className="confirm-text" style={{ padding: 0, marginBottom: 16 }}>
+            Cinq minutes suffisent pour être prêt à travailler sereinement.
+          </p>
+          <ul className="guide-list">
+            {ETAPES.map((e, idx) => (
+              <li key={idx} className="guide-item">
+                <div className="guide-item-icon"><e.icon size={17} /></div>
+                <div className="guide-item-text">
+                  <div className="guide-item-title">{e.titre}</div>
+                  <p>{e.texte}</p>
+                  {e.tab && (
+                    <button
+                      className="link-btn"
+                      style={{ padding: 0 }}
+                      onClick={() => { setTab(e.tab); onClose(); }}
+                    >
+                      Y aller <ChevronRight size={14} />
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-primary" onClick={onClose}>J'ai compris, c'est parti</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3863,6 +3969,16 @@ function Style() {
       .mini-name { font-weight: 600; }
       .mini-meta { font-size: 12px; color: var(--ink-soft); }
       .empty-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); padding: 10px 0; }
+
+      .guide-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+      .guide-item { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px dashed var(--line); }
+      .guide-item:last-child { border-bottom: none; }
+      .guide-item-icon {
+        width: 32px; height: 32px; border-radius: 9px; background: var(--sage); color: var(--teal);
+        display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      }
+      .guide-item-title { font-weight: 600; font-size: 13.5px; margin-bottom: 3px; color: var(--teal-deep); }
+      .guide-item-text p { margin: 0 0 6px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
 
       .toolbar { display: flex; gap: 10px; }
       .search-box { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; flex: 1; max-width: 340px; color: var(--ink-soft); }
