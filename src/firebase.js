@@ -766,6 +766,25 @@ export async function marquerBonRembourse(pharmacieId, bonId) {
 }
 
 // ---------------------------------------------------------------
+// GUIDE DE DÉMARRAGE — indique si le gérant a déjà vu le guide
+// d'accueil, pour ne l'afficher automatiquement qu'une seule fois (à
+// la création de la pharmacie). Reste accessible à tout moment depuis
+// le bouton "Guide de démarrage" du menu (voir App.jsx).
+// pharmacies/{pharmacieId}/meta/onboarding : { vu: boolean }
+// ---------------------------------------------------------------
+export function subscribeOnboarding(pharmacieId, callback) {
+  const ref = doc(db, "pharmacies", pharmacieId, "meta", "onboarding");
+  return onSnapshot(ref, (snap) => {
+    callback(snap.exists() ? snap.data() : { vu: false });
+  });
+}
+
+export async function marquerOnboardingVu(pharmacieId) {
+  const ref = doc(db, "pharmacies", pharmacieId, "meta", "onboarding");
+  await setDoc(ref, { vu: true }, { merge: true });
+}
+
+// ---------------------------------------------------------------
 // CAISSE — sessions d'ouverture/fermeture. Une seule session peut
 // être "ouverte" à la fois pour la pharmacie (un tiroir-caisse
 // physique). Les compteurs (ventes espèces, retours espèces,
