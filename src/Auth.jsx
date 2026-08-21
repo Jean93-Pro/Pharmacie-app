@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
   Eye, EyeOff, CheckCircle2, ShieldCheck, TrendingUp, Users,
   Gift, Truck, Stethoscope, Wallet, MessageCircle, Mail, PlayCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { inscrirePharmacie, connecterPharmacie, reinitialiserMotDePasse, accederDemo } from "./firebase.js";
 import { LegalModal, CGU, PolitiqueConfidentialite, MentionsLegales } from "./Legal.jsx";
@@ -132,6 +133,11 @@ export default function Auth() {
                 </li>
               ))}
             </ul>
+
+            <div className="auth-risk-note">
+              <AlertTriangle size={13} />
+              Un carton de médicaments périmés non repéré coûte souvent plus cher qu'une année d'abonnement.
+            </div>
 
             <div className="auth-trust-row">
               <span><ShieldCheck size={13} /> Données sauvegardées automatiquement</span>
@@ -455,6 +461,16 @@ const authStyles = `
   .auth-atout-icon {
     width: 26px; height: 26px; border-radius: 7px; background: rgba(171,134,54,0.22); color: var(--gold-soft);
     display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;
+  }
+
+  /* Encart d'urgence réelle : coût de l'inaction, juste après les
+     atouts et avant la ligne de réassurance — le moment où la
+     personne a déjà vu ce que fait l'appli et peut évaluer le risque
+     de continuer sans elle. */
+  .auth-risk-note {
+    display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; color: #f0dad7;
+    background: rgba(143,58,58,0.25); border: 1px solid rgba(143,58,58,0.4);
+    padding: 8px 10px; border-radius: 8px; margin: -6px 0 22px; line-height: 1.4;
   }
 
   /* Ligne de réassurance en bas du panneau : sécurité des données +
