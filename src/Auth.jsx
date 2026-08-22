@@ -16,6 +16,7 @@ export default function Auth() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [voirPassword, setVoirPassword] = useState(false);
   const [nomPharmacie, setNomPharmacie] = useState("");
+  const [accepteCGU, setAccepteCGU] = useState(false);
   const [erreur, setErreur] = useState("");
   const [info, setInfo] = useState("");
   const [chargement, setChargement] = useState(false);
@@ -40,6 +41,10 @@ export default function Auth() {
       }
       if (password !== confirmPassword) {
         setErreur("Les deux mots de passe ne correspondent pas.");
+        return;
+      }
+      if (!accepteCGU) {
+        setErreur("Merci d'accepter les conditions d'utilisation pour continuer.");
         return;
       }
     }
@@ -105,6 +110,16 @@ export default function Auth() {
   return (
     <div className="auth-shell">
       <style>{authStyles}</style>
+
+      {/* Bannière pleine largeur, toujours visible (connexion comme
+          inscription, desktop comme mobile) — remplace l'ancien badge
+          qui n'apparaissait qu'en mode inscription sur mobile. */}
+      <div className="auth-top-banner">
+        <span className="auth-top-banner-dot" />
+        <Gift size={14} />
+        14 jours d'essai gratuit — sans carte bancaire, annulable à tout moment
+      </div>
+
       <div className="auth-grid">
         <div className="auth-brand-panel">
           <div className="auth-brand-glow" />
@@ -115,10 +130,6 @@ export default function Auth() {
                 <div className="auth-brand-title">Officine</div>
                 <div className="auth-brand-sub">Gestion de pharmacie</div>
               </div>
-            </div>
-
-            <div className="auth-trial-badge">
-              <Gift size={13} /> 14 jours d'essai gratuit — sans carte bancaire
             </div>
 
             <h1 className="auth-tagline">L'officine, simplement mieux gérée.</h1>
@@ -155,12 +166,6 @@ export default function Auth() {
                 <div className="auth-brand-sub">Gestion de pharmacie</div>
               </div>
             </div>
-
-            {mode === "inscription" && (
-              <div className="auth-trial-badge auth-trial-badge-mobile">
-                <Gift size={13} /> 14 jours d'essai gratuit — sans carte bancaire
-              </div>
-            )}
 
             {mode !== "oubli" && (
               <div className="auth-tabs">
@@ -295,10 +300,30 @@ export default function Auth() {
                 </button>
               )}
 
+              {mode === "inscription" && (
+                <label className="auth-cgu-check">
+                  <input
+                    type="checkbox"
+                    checked={accepteCGU}
+                    onChange={(e) => setAccepteCGU(e.target.checked)}
+                  />
+                  <span>
+                    J'accepte les{" "}
+                    <button type="button" onClick={() => setPageLegale("cgu")}>conditions d'utilisation</button>
+                    {" "}et la{" "}
+                    <button type="button" onClick={() => setPageLegale("confidentialite")}>politique de confidentialité</button>
+                  </span>
+                </label>
+              )}
+
               {erreur && <div className="auth-error">{erreur}</div>}
               {info && <div className="auth-info"><CheckCircle2 size={14} /> {info}</div>}
 
-              <button className="auth-submit" type="submit" disabled={chargement}>
+              <button
+                className="auth-submit"
+                type="submit"
+                disabled={chargement || (mode === "inscription" && !accepteCGU)}
+              >
                 {chargement
                   ? "Un instant…"
                   : mode === "inscription"
@@ -416,6 +441,23 @@ const authStyles = `
   }
   .auth-shell * { box-sizing: border-box; }
 
+  /* ---------- Bannière d'essai gratuit, pleine largeur ---------- */
+  .auth-top-banner {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: linear-gradient(90deg, var(--gold) 0%, #c49a44 100%);
+    color: #241605; font-size: 12.5px; font-weight: 700;
+    padding: 9px 14px; text-align: center; letter-spacing: 0.1px;
+  }
+  .auth-top-banner-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #241605;
+    animation: authPulse 1.8s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes authPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(1.5); }
+  }
+
   .auth-grid { display: grid; grid-template-columns: 1.05fr 1fr; width: 100%; flex: 1; }
 
   /* ---------- Panneau de présentation ---------- */
@@ -439,18 +481,6 @@ const authStyles = `
   .auth-brand-title { font-family: var(--font-display); font-size: 17px; font-weight: 600; }
   .auth-brand-sub { font-size: 11px; opacity: 0.7; margin-top: 1px; }
 
-  /* Badge d'essai gratuit — mis en avant tout en haut du panneau,
-     premier repère visuel avant même le slogan, pour lever le frein
-     principal à l'inscription (peur de devoir payer tout de suite). */
-  .auth-trial-badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(171,134,54,0.20); color: var(--gold-soft);
-    border: 1px solid rgba(171,134,54,0.4);
-    border-radius: 20px; padding: 5px 12px; font-size: 11.5px; font-weight: 700;
-    margin-bottom: 18px; width: fit-content;
-  }
-  .auth-trial-badge-mobile { margin-bottom: 16px; background: var(--gold-soft); color: var(--amber, #ad7a2e); border-color: var(--gold); }
-
   .auth-tagline {
     font-family: var(--font-display); font-weight: 600; font-size: 32px; line-height: 1.2;
     margin: 0 0 14px; letter-spacing: -0.3px;
@@ -464,9 +494,7 @@ const authStyles = `
   }
 
   /* Encart d'urgence réelle : coût de l'inaction, juste après les
-     atouts et avant la ligne de réassurance — le moment où la
-     personne a déjà vu ce que fait l'appli et peut évaluer le risque
-     de continuer sans elle. */
+     atouts et avant la ligne de réassurance. */
   .auth-risk-note {
     display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; color: #f0dad7;
     background: rgba(143,58,58,0.25); border: 1px solid rgba(143,58,58,0.4);
@@ -530,6 +558,19 @@ const authStyles = `
   }
   .auth-eye-btn:hover { color: var(--teal); background: var(--sage); }
   .auth-forgot { align-self: flex-end; border: none; background: none; color: var(--teal); font-size: 11.5px; font-weight: 600; cursor: pointer; padding: 0; margin-top: -4px; }
+
+  /* Case d'acceptation des CGU, obligatoire à l'inscription */
+  .auth-cgu-check {
+    display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px;
+    color: var(--ink-soft); line-height: 1.5; cursor: pointer;
+  }
+  .auth-cgu-check input { margin-top: 2px; flex-shrink: 0; }
+  .auth-cgu-check button {
+    border: none; background: none; color: var(--teal); font-weight: 700;
+    cursor: pointer; padding: 0; font-size: 11.5px; text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
   .auth-error { background: var(--rose-soft); color: var(--rose); font-size: 12px; padding: 9px 11px; border-radius: 8px; }
   .auth-info { background: var(--ok-soft); color: var(--ok); font-size: 12px; padding: 9px 11px; border-radius: 8px; display: flex; align-items: center; gap: 6px; }
   .auth-submit {
@@ -580,5 +621,6 @@ const authStyles = `
     .auth-brand-panel { display: none; }
     .auth-card-head-mobile { display: flex; }
     .auth-form-panel { padding: 32px 20px; }
+    .auth-top-banner { font-size: 11.5px; padding: 8px 10px; }
   }
 `;
